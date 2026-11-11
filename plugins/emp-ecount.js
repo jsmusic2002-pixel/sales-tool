@@ -14,7 +14,7 @@
     errorTable: "products", // 매칭 실패 품목에서 '등록' 링크가 열릴 매핑 테이블
     tables: [
       { ns: "customers",  title: "거래처DB",        fields: [{ l: "판매자ID별칭" }, { l: "거래처코드" }, { l: "담당자" }] },
-      { ns: "warehouses", title: "창고DB",          fields: [{ l: "주의메세지" }, { l: "출하창고" }] },
+      { ns: "warehouses", title: "창고DB",          fields: [{ l: "기타메세지" }, { l: "출하창고" }] },
       { ns: "products",   title: "품목코드DB",      fields: [{ l: "주문선택사항" }, { l: "품목코드" }, { l: "품목명" }] },
       { ns: "sets",       title: "특별치환·행분리", fields: [{ l: "주문선택사항" }, { l: "분리수" }, { l: "품목명들 (한 줄에 하나)", lines: true }] },
     ],
@@ -22,8 +22,8 @@
     run({ rows, maps, date }) {
       const cols = rows.length ? Object.keys(rows[0]) : [];
       const c = { seller: find(cols, ["판매자ID별칭"]), opt: find(cols, ["주문선택사항"]), qty: find(cols, ["수량", "주문수량"]),
-                  price: find(cols, ["판매가", "상품판매가"]), msg: find(cols, ["주의메세지"]) };
-      const miss = Object.entries({ 판매자ID별칭: c.seller, 주문선택사항: c.opt, 수량: c.qty, 판매가: c.price, 주의메세지: c.msg }).filter(([, v]) => !v).map(([k]) => k);
+                  price: find(cols, ["판매가", "상품판매가"]), msg: find(cols, ["기타메세지", "주의메세지"]) };
+      const miss = Object.entries({ 판매자ID별칭: c.seller, 주문선택사항: c.opt, 수량: c.qty, 판매가: c.price, 기타메세지: c.msg }).filter(([, v]) => !v).map(([k]) => k);
       if (miss.length) throw new Error("필수 컬럼 누락: " + miss.join(", "));
 
       const errors = new Set(), skipped = {}, res = [];
