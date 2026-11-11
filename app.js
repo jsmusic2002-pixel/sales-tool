@@ -115,5 +115,10 @@ async function route() {
   runView(p);
 }
 window.addEventListener("hashchange", route);
-sb.auth.onAuthStateChange((_, s) => { user = s?.user ?? null; user ? route() : loginView(); });
+sb.auth.onAuthStateChange((_, s) => {
+  const u = s?.user ?? null, same = (u && user && u.id === user.id) || (!u && !user);
+  user = u;
+  if (same) return; // 파일 선택 창을 닫을 때 등 같은 사용자의 이벤트로는 화면을 다시 그리지 않음
+  user ? route() : loginView();
+});
 sb.auth.getSession().then(({ data }) => { if (!data.session) loginView(); });
