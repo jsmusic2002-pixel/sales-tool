@@ -30,8 +30,9 @@ function loginView(msg = "") {
 
 // ---------- 레이아웃 ----------
 function shell(active, body) {
-  const nav = PLUGINS.map(p => `<div class="grp">${esc(p.name)}</div><a href="#/${p.id}/run" class="${active === p.id + "/run" ? "on" : ""}">변환</a>` +
-    p.tables.map(t => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}">${esc(t.title)}</a>`).join("")).join("");
+  const nav = PLUGINS.map(p => `<div class="grp">${esc(p.name)}</div><a href="#/${p.id}/run" class="${active === p.id + "/run" ? "on" : ""}">${esc(p.runLabel || "변환")}</a>
+    <details ${active.startsWith(p.id + "/t/") ? "open" : ""}><summary>${esc(p.dbLabel || "DB관리")}</summary>` +
+    p.tables.map(t => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}">${esc(t.title)}</a>`).join("") + `</details>`).join("");
   app.innerHTML = `<div class="layout"><aside><h1>매출 입력 변환</h1>${nav}
     <div class="me">${esc(user.email.split("@")[0])} · <a href="#" id="out" style="display:inline;padding:0">로그아웃</a></div></aside><main><div id="toast"></div>${body}</main></div>`;
   $("#out").onclick = e => { e.preventDefault(); sb.auth.signOut(); };
@@ -73,12 +74,13 @@ function bindDownload(l) { const b = $("#dl"); if (b) b.onclick = () => XLSX.wri
 // ---------- 매핑 관리 화면 ----------
 async function tableView(p, t, q) {
   shell(`${p.id}/t/${t.ns}`, `<h2>${esc(t.title)}</h2><div class="card">로딩 중...</div>`);
-  const ns = `${p.id}/${t.ns}`;
-  let rows; try { rows = await fetchNs(ns); } catch (e) { return toast("불러오기 실패: " + e.message, true); }
+  const ns = `${p.id}/${t.ns}`, ro = !!t.readonly;
+  let rows, master = [];
+  try { rows = await fetchNs(ns); if (t.pick) master = await fetchNs(`${p.id}/${t.pick.ns}`); } catch (e) { return toast("불러오기 실패: " + e.message, true); }
   const preset = new URLSearchParams(q).get("new") || "";
   const draw = (filter = "") => {
     const f = filter.toLowerCase(), shown = rows.filter(r => !f || (r.k + " " + r.v.join(" ")).toLowerCase().includes(f)).slice(0, 200);
-    $("#rows").innerHTML = shown.map((r, i) => `<tr><td>${esc(r.k)}</td>${r.v.map(x => `<td>${esc(x)}</td>`).join("")}<td style="width:60px"><button class="del" data-k="${esc(r.k)}">삭제</button></td></tr>`).join("") || `<tr><td class="mut">결과 없음</td></tr>`;
+    $("#rows").innerHTML = shown.map(r => `<tr><td>${esc(r.k)}</td>${r.v.map(x => `<td>${esc(x)}</td>`).join("")}${ro ? "" : `<td style="width:60px"><button class="del" data-k="${esc(r.k)}">삭제</button></td>`}</tr>`).join("") || `<tr><td class="mut">결과 없음</td></tr>`;
     $("#cnt").textContent = `전체 ${rows.length}행` + (shown.length === 200 ? " · 200행까지 표시, 검색을 이용하세요" : "");
     document.querySelectorAll(".del").forEach(b => b.onclick = async () => {
       if (!confirm("삭제할까요?")) return;
@@ -87,13 +89,58 @@ async function tableView(p, t, q) {
       rows = rows.filter(r => r.k !== b.dataset.k); draw($("#q").value);
     });
   };
-  $("main").innerHTML = `<div id="toast"></div><h2>${esc(t.title)} <span class="mut" id="cnt" style="font-size:13px;font-weight:400"></span></h2>
-    <div class="card"><input id="q" placeholder="검색" style="width:100%"></div>
-    <div class="card"><div class="mut" style="margin-bottom:8px">추가 / 수정 — 첫 번째 값이 같으면 덮어씁니다</div><form id="f" class="row">
-      ${t.fields.map((fl, i) => `<label>${esc(fl.l)}${fl.lines ? `<textarea rows="3" name="f${i}" cols="34"></textarea>` : `<input name="f${i}" ${i === 0 ? `style="width:280px" value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>
-    <div class="card wrap"><table><tr>${t.fields.map(fl => `<th>${esc(fl.l)}</th>`).join("")}<th></th></tr><tbody id="rows"></tbody></table></div>`;
+  const importCard = t.import ? `<div class="card"><div class="mut" style="margin-bottom:8px">${esc(t.import.label)} — 전체 목록을 올리면 기존 데이터와 비교해 신규·변경·삭제를 반영합니다</div>
+    <div class="row"><input type="file" id="imp" accept=".xlsx,.xls"><button id="impgo">비교하기</button></div><div id="impres" style="margin-top:12px"></div></div>` : "";
+  const pickCard = t.pick ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 선택하면 아래 입력칸이 자동으로 채워집니다" : `기초자료가 비어 있습니다. 먼저 <a href="#/${p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
+    <input id="pq" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div id="pr"></div></div>` : "";
+  const formCard = ro ? "" : `<div class="card"><div class="mut" style="margin-bottom:8px">추가 / 수정 — 첫 번째 값이 같으면 덮어씁니다</div><form id="f" class="row">
+      ${t.fields.map((fl, i) => `<label>${esc(fl.l)}${fl.lines ? `<textarea rows="3" name="f${i}" cols="34"></textarea>` : `<input name="f${i}" ${i === 0 ? `style="width:280px" value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>`;
+  $("main").innerHTML = `<div id="toast"></div><h2>${esc(t.title)} <span class="mut" id="cnt" style="font-size:13px;font-weight:400"></span></h2>${importCard}
+    <div class="card"><input id="q" placeholder="검색" style="width:100%"></div>${pickCard}${formCard}
+    <div class="card wrap"><table><tr>${t.fields.map(fl => `<th>${esc(fl.l)}</th>`).join("")}${ro ? "" : "<th></th>"}</tr><tbody id="rows"></tbody></table></div>`;
   $("#q").oninput = e => draw(e.target.value);
-  $("#f").onsubmit = async e => {
+
+  if (t.pick) {   // 기초자료 검색 → 선택 시 입력칸 자동 채움 (사용구분 NO인 품목은 제외)
+    const usable = master.filter(r => r.v[3] !== "NO"); let hit = [];
+    $("#pq").oninput = e => {
+      const tk = e.target.value.toLowerCase().split(/\s+/).filter(Boolean);
+      hit = tk.length ? usable.filter(r => { const h = `${r.k} ${r.v[0]} ${r.v[2] || ""}`.toLowerCase(); return tk.every(x => h.includes(x)); }).slice(0, 8) : [];
+      $("#pr").innerHTML = hit.map((r, i) => `<div class="pick" data-i="${i}"><b>${esc(r.v[0])}</b> <span class="mut">${esc(r.k)}</span></div>`).join("");
+      document.querySelectorAll(".pick").forEach(el => el.onclick = () => {
+        const r = hit[el.dataset.i];
+        for (const [i, src] of Object.entries(t.pick.fill)) $("#f")["f" + i].value = src === "k" ? r.k : r.v[0];
+        $("#pr").innerHTML = ""; $("#pq").value = "";
+      });
+    };
+  }
+  if (t.import) {
+    $("#impgo").onclick = async () => {
+      const file = $("#imp").files[0]; if (!file) return toast("파일을 선택하세요.", true);
+      try {
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const next = t.import.parse(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: null, raw: true }));
+        if (!next.length) throw new Error("읽을 데이터가 없습니다.");
+        const cur = new Map(rows.map(r => [r.k, JSON.stringify(r.v)])), nk = new Set(next.map(r => r.k));
+        const add = next.filter(r => !cur.has(r.k)), chg = next.filter(r => cur.has(r.k) && cur.get(r.k) !== JSON.stringify(r.v)), del = rows.filter(r => !nk.has(r.k));
+        const big = cur.size > 0 && del.length > cur.size * 0.3;
+        $("#impres").innerHTML = `<b>신규 ${add.length} · 변경 ${chg.length} · 삭제 ${del.length}</b> <span class="mut">(변동 없음 ${next.length - add.length - chg.length})</span>
+          ${big ? `<div class="err">삭제가 많습니다(${del.length}건). 파일이 전체 목록이 맞는지 확인하세요.</div>` : ""}
+          ${add.length ? `<div class="mut" style="margin:6px 0">신규 예: ${add.slice(0, 5).map(r => esc(r.v[0])).join(", ")}${add.length > 5 ? " …" : ""}</div>` : ""}
+          <button id="apply" ${add.length + chg.length + del.length ? "" : "disabled"}>반영하기</button>`;
+        $("#apply").onclick = async () => {
+          $("#apply").disabled = true;
+          try {
+            const up = [...add, ...chg].map(r => ({ ns, k: r.k, v: r.v }));
+            for (let i = 0; i < up.length; i += 500) { const { error } = await sb.from("lookup").upsert(up.slice(i, i + 500)); if (error) throw error; }
+            for (let i = 0; i < del.length; i += 100) { const { error } = await sb.from("lookup").delete().eq("ns", ns).in("k", del.slice(i, i + 100).map(r => r.k)); if (error) throw error; }
+            rows = next.map(r => ({ k: r.k, v: r.v })).sort((a, b) => (a.k < b.k ? -1 : 1));
+            $("#impres").innerHTML = ""; toast(`반영 완료: 신규 ${add.length}, 변경 ${chg.length}, 삭제 ${del.length}`); draw($("#q").value);
+          } catch (e) { toast("반영 실패: " + (e.message || e), true); $("#apply").disabled = false; }
+        };
+      } catch (e) { toast(e.message || String(e), true); }
+    };
+  }
+  if (!ro) $("#f").onsubmit = async e => {
     e.preventDefault();
     const vals = t.fields.map((fl, i) => { const v = e.target["f" + i].value; return fl.lines ? v.split("\n").map(x => x.trim()).filter(Boolean).join("\n") : v.trim(); });
     if (!vals[0]) return toast("첫 번째 값은 필수입니다.", true);
