@@ -6,17 +6,38 @@
   const DEFAULT_WAREHOUSE = "00260";
   const find = (cols, kws) => cols.find(c => kws.some(k => String(c).includes(k)));
 
+  // 이카운트 '품목등록' 엑셀 → [{k:품목코드, v:[품목명,입고단가,검색창내용,사용구분,품목그룹1명]}]
+  const parseMaster = aoa => {
+    const h = aoa.findIndex(r => s(r[0]) === "품목코드");
+    if (h < 0) throw new Error("'품목코드' 헤더를 찾을 수 없습니다. 이카운트 품목등록 엑셀이 맞는지 확인하세요.");
+    const hd = aoa[h].map(s), ix = n => hd.indexOf(n);
+    if (ix("품목명") < 0) throw new Error("'품목명' 열이 없습니다.");
+    const out = new Map();
+    for (const r of aoa.slice(h + 1)) {
+      const k = s(r[0]), name = s(r[ix("품목명")]);
+      if (!k || !name) continue;            // 맨 아래 출력 일시 줄 등 제외
+      out.set(k, { k, v: [name, s(r[ix("입고단가")]), s(r[ix("검색창내용")]), s(r[ix("사용구분")]), s(r[ix("품목그룹1명")])] });
+    }
+    return [...out.values()];
+  };
+
   PLUGINS.push({
     id: "emp-ecount",
     name: "EMP → 이카운트 매출",
     input: "EMP 정산 파일 (.xls / .xlsx)",
     outputName: d => `${d}_이카운트정산.xlsx`,
     errorTable: "products", // 매칭 실패 품목에서 '등록' 링크가 열릴 매핑 테이블
+    runLabel: "정산파일 업로드",
+    dbLabel: "DB관리",
     tables: [
-      { ns: "customers",  title: "거래처DB",        fields: [{ l: "판매자ID별칭" }, { l: "거래처코드" }, { l: "담당자" }] },
-      { ns: "warehouses", title: "창고DB",          fields: [{ l: "기타메세지" }, { l: "출하창고" }] },
-      { ns: "products",   title: "품목코드DB",      fields: [{ l: "주문선택사항" }, { l: "품목코드" }, { l: "품목명" }] },
-      { ns: "sets",       title: "특별치환·행분리", fields: [{ l: "주문선택사항" }, { l: "분리수" }, { l: "품목명들 (한 줄에 하나)", lines: true }] },
+      { ns: "master", title: "[DB]품목코드", readonly: true,   // 이카운트 품목등록 엑셀을 통째로 올려 동기화
+        fields: [{ l: "품목코드" }, { l: "품목명" }, { l: "입고단가" }, { l: "검색창내용" }, { l: "사용구분" }, { l: "품목그룹1명" }],
+        import: { label: "이카운트 품목등록 엑셀 (.xlsx)", parse: parseMaster } },
+      { ns: "customers",  title: "[DB]거래처",   fields: [{ l: "판매자ID별칭" }, { l: "거래처코드" }, { l: "담당자" }] },
+      { ns: "warehouses", title: "[DB]창고",     fields: [{ l: "기타메세지" }, { l: "출하창고" }] },
+      { ns: "products",   title: "[DB]품목매칭", fields: [{ l: "주문선택사항" }, { l: "품목코드" }, { l: "품목명" }],
+        pick: { ns: "master", fill: { 1: "k", 2: "v0" } } },   // 기초자료에서 골라 품목코드·품목명 자동 입력
+      { ns: "sets",       title: "[DB]특별매칭", fields: [{ l: "주문선택사항" }, { l: "분리수" }, { l: "품목명들 (한 줄에 하나)", lines: true }] },
     ],
     // rows: 업로드 시트의 행 객체 배열, maps[ns][key] = [값...]  →  { headers, out, errors, notes }
     run({ rows, maps, date }) {
