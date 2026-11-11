@@ -37,7 +37,7 @@
       { ns: "warehouses", title: "[DB]창고",     fields: [{ l: "기타메세지" }, { l: "출하창고" }] },
       { ns: "products",   title: "[DB]품목매칭", fields: [{ l: "주문선택사항" }, { l: "품목코드" }, { l: "품목명" }],
         pick: { ns: "master", fill: { 1: "k", 2: "v0" } } },   // 기초자료에서 골라 품목코드·품목명 자동 입력
-      { ns: "sets",       title: "[DB]특별매칭", fields: [{ l: "주문선택사항" }, { l: "분리수" }, { l: "품목명들 (한 줄에 하나)", lines: true }] },
+      { ns: "sets",       title: "[DB]특별매칭", fields: [{ l: "주문선택사항" }, { l: "분리수" }, { l: "품목명들 (한 줄에 하나)", lines: true, suggest: "products" }] },
     ],
     // rows: 업로드 시트의 행 객체 배열, maps[ns][key] = [값...]  →  { headers, out, errors, notes }
     run({ rows, maps, date }) {
