@@ -75,8 +75,9 @@ function bindDownload(l) { const b = $("#dl"); if (b) b.onclick = () => XLSX.wri
 async function tableView(p, t, q) {
   shell(`${p.id}/t/${t.ns}`, `<h2>${esc(t.title)}</h2><div class="card">로딩 중...</div>`);
   const ns = `${p.id}/${t.ns}`, ro = !!t.readonly;
-  let rows, master = [];
-  try { rows = await fetchNs(ns); if (t.pick) master = await fetchNs(`${p.id}/${t.pick.ns}`); } catch (e) { return toast("불러오기 실패: " + e.message, true); }
+  let rows, master = [], names = [];
+  try { rows = await fetchNs(ns); if (t.pick) master = await fetchNs(`${p.id}/${t.pick.ns}`);
+    const sgf0 = t.fields.find(fl => fl.suggest); if (sgf0) names = (await fetchNs(`${p.id}/${sgf0.suggest}`)).map(r => r.k); } catch (e) { return toast("불러오기 실패: " + e.message, true); }
   const preset = new URLSearchParams(q).get("new") || "";
   const draw = (filter = "") => {
     const f = filter.toLowerCase(), shown = rows.filter(r => !f || (r.k + " " + r.v.join(" ")).toLowerCase().includes(f)).slice(0, 200);
@@ -94,12 +95,33 @@ async function tableView(p, t, q) {
   const pickCard = t.pick ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 선택하면 아래 입력칸이 자동으로 채워집니다" : `기초자료가 비어 있습니다. 먼저 <a href="#/${p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
     <input id="pq" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div id="pr"></div></div>` : "";
   const formCard = ro ? "" : `<div class="card"><div class="mut" style="margin-bottom:8px">추가 / 수정 — 첫 번째 값이 같으면 덮어씁니다</div><form id="f" class="row">
-      ${t.fields.map((fl, i) => `<label>${esc(fl.l)}${fl.lines ? `<textarea rows="3" name="f${i}" cols="34"></textarea>` : `<input name="f${i}" ${i === 0 ? `style="width:280px" value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>`;
+      ${t.fields.map((fl, i) => `<label>${esc(fl.l)}${fl.lines ? `<textarea rows="3" name="f${i}" ${fl.suggest ? 'style="width:min(460px,90vw)"' : 'cols="34"'}></textarea>${fl.suggest ? '<div id="sgbox"></div><div id="sgwarn" class="err" style="font-size:12.5px"></div>' : ""}` : `<input name="f${i}" ${i === 0 ? `style="width:280px" value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>`;
   $("main").innerHTML = `<div id="toast"></div><h2>${esc(t.title)} <span class="mut" id="cnt" style="font-size:13px;font-weight:400"></span></h2>${importCard}
     <div class="card"><input id="q" placeholder="검색" style="width:100%"></div>${pickCard}${formCard}
     <div class="card wrap"><table><tr>${t.fields.map(fl => `<th>${esc(fl.l)}</th>`).join("")}${ro ? "" : "<th></th>"}</tr><tbody id="rows"></tbody></table></div>`;
   $("#q").oninput = e => draw(e.target.value);
 
+  let sgRefresh = () => {};
+  const sgf = t.fields.find(fl => fl.suggest);
+  if (sgf && !ro) {   // 커서가 있는 줄을 기준으로 부분 일치 후보 표시 → 선택하면 그 줄을 교체
+    const ta = $("#f")["f" + t.fields.indexOf(sgf)], box = $("#sgbox"), warn = $("#sgwarn"), known = new Set(names);
+    let hit = [];
+    const cur = () => { const v = ta.value, pos = ta.selectionStart, s = v.lastIndexOf("\n", pos - 1) + 1; let e = v.indexOf("\n", pos); if (e < 0) e = v.length; return { v, s, e, line: v.slice(s, e).trim() }; };
+    sgRefresh = () => {
+      const { line } = cur(), tk = line.toLowerCase().split(/\s+/).filter(Boolean);
+      hit = tk.length && !known.has(line) ? names.filter(n => { const h = n.toLowerCase(); return tk.every(x => h.includes(x)); }).slice(0, 8) : [];
+      box.innerHTML = hit.map((n, i) => `<div class="pick" data-i="${i}">${esc(n)}</div>`).join("");
+      const bad = ta.value.split("\n").map(x => x.trim()).filter(x => x && !known.has(x));
+      warn.textContent = bad.length ? "[DB]품목매칭에 없는 이름: " + bad.join(", ") : "";
+      box.querySelectorAll(".pick").forEach(el => el.onmousedown = ev => {
+        ev.preventDefault();
+        const { v, s, e } = cur(), n = hit[el.dataset.i];
+        ta.value = v.slice(0, s) + n + (e >= v.length ? "\n" : v.slice(e));
+        ta.focus(); const pos = s + n.length + (e >= v.length ? 1 : 0); ta.setSelectionRange(pos, pos); sgRefresh();
+      });
+    };
+    ["input", "click", "keyup"].forEach(ev => ta.addEventListener(ev, sgRefresh));
+  }
   if (t.pick) {   // 기초자료 검색 → 선택 시 입력칸 자동 채움 (사용구분 NO인 품목은 제외)
     const usable = master.filter(r => r.v[3] !== "NO"); let hit = [];
     $("#pq").oninput = e => {
@@ -148,7 +170,7 @@ async function tableView(p, t, q) {
     const { error } = await sb.from("lookup").upsert(rec);
     if (error) return toast(error.message, true);
     rows = [...rows.filter(r => r.k !== rec.k), { k: rec.k, v: rec.v }].sort((a, b) => (a.k < b.k ? -1 : 1));
-    e.target.reset(); toast("저장했습니다."); draw($("#q").value);
+    e.target.reset(); sgRefresh(); toast("저장했습니다."); draw($("#q").value);
   };
   draw();
 }
