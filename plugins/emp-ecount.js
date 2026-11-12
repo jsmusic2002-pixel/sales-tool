@@ -91,7 +91,7 @@
       }
 
       // ---------- 택배비 행 ----------
-      // ① 기타메세지가 '광명'인 행 제외 → ② 수령자휴대폰번호 중복은 1건으로(선결제 행 우선)
+      // ① 기타메세지가 '광명'이거나 주문선택사항에 '광명 출고'(띄어쓰기 무관)가 있는 행 제외 → ② 수령자휴대폰번호 중복은 1건으로(선결제 행 우선)
       // ③ 선결제는 배송비금액(테무(필품)은 0이 아니면 3,000원), 무료배송은 0원 → ④ 판매자ID별칭·출하창고·금액이 모두 같은 건끼리만 합산: 수량=건수, 단가=그 금액(평균 아님)
       // 출하창고가 00279이면 품목코드 02096, 아니면 01921. 금액이 다르면 별도 행 (무료 0원도 별도 행)
       const info = [], notes = [], shipStat = new Map();
@@ -103,7 +103,7 @@
         for (const r of rows) {
           const seller = s(r[c.seller]);
           if (!maps.customers[seller]) continue;                       // 거래처DB에 없는 판매처는 상품 행과 동일하게 제외
-          if (s(r[c.msg]) === SHIP.SKIP_MSG) { gm++; continue; }       // 이미 수동으로 택배비를 입력한 건
+          if (s(r[c.msg]) === SHIP.SKIP_MSG || s(r[c.opt]).replace(/\s+/g, "").includes("광명출고")) { gm++; continue; }   // 이미 수동 입력한 건 + 주문선택사항에 "광명 출고"가 있는 건
           const ph = s(r[cP]), key = ph || "__none" + uid++;           // 번호가 비어 있으면 합치지 않고 각각 처리
           if (!groups.has(key)) groups.set(key, []);
           groups.get(key).push(r);
