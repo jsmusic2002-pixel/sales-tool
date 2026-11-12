@@ -33,6 +33,7 @@
       { label: "품목매칭등록", ns: "products" },
       { label: "특별매칭등록", ns: "sets", when: /[+＋]|세트|set\b|\bset/i },
     ],
+    weekStartDay: 5,   // 주간 매출 기준: 금요일(5) ~ 목요일
     runLabel: "정산파일 업로드",
     dbLabel: "DB관리",
     tables: [
@@ -54,6 +55,13 @@
       if (miss.length) throw new Error("필수 컬럼 누락: " + miss.join(", "));
 
       const errors = new Set(), skipped = {}, res = [];
+      // 대시보드 집계: [쇼핑몰(판매자ID별칭), 품목코드, 품목명, 수량, 금액(부가세 포함)] — 이카운트에 올라가는 행과 같은 값
+      const sale = new Map();
+      const addSale = (seller, row) => {
+        const k = seller + "\u0000" + row.품목코드; let e = sale.get(k);
+        if (!e) sale.set(k, e = [seller, row.품목코드, row.품목명, 0, 0]);
+        e[3] += row.수량; e[4] += row.공급가액 + row.부가세;
+      };
       const mk = (cu, wh, pr, qty, price, unit) => {
         const sup = R(price / 1.1);
         return { 일자: date, 거래처코드: cu[0], 담당자: cu[1] || "", 출하창고: wh, 품목코드: pr[0], 품목명: pr[1], 수량: qty, 단가: unit, 공급가액: sup, 부가세: price - sup };
@@ -73,12 +81,12 @@
           for (let i = 0; i < qty; i++) for (const name of items) {
             const pr = maps.products[name];
             if (!pr) { errors.add(name); continue; }
-            res.push(mk(cu, wh, pr, 1, unit, unit));
+            const row = mk(cu, wh, pr, 1, unit, unit); res.push(row); addSale(seller, row);
           }
         } else {
           const pr = maps.products[opt];
           if (!pr) { errors.add(opt); continue; }
-          res.push(mk(cu, wh, pr, qty, total, qty > 0 ? R(total / qty) : 0));
+          const row = mk(cu, wh, pr, qty, total, qty > 0 ? R(total / qty) : 0); res.push(row); addSale(seller, row);
         }
       }
 
@@ -86,7 +94,7 @@
       // ① 기타메세지가 '광명'인 행 제외 → ② 수령자휴대폰번호 중복은 1건으로(선결제 행 우선)
       // ③ 선결제는 배송비금액(테무(필품)은 0이 아니면 3,000원), 무료배송은 0원 → ④ 판매자ID별칭·출하창고·금액이 모두 같은 건끼리만 합산: 수량=건수, 단가=그 금액(평균 아님)
       // 출하창고가 00279이면 품목코드 02096, 아니면 01921. 금액이 다르면 별도 행 (무료 0원도 별도 행)
-      const info = [], notes = [];
+      const info = [], notes = [], shipStat = new Map();
       const cH = find(cols, ["조건적용후", "배송방법(묶음"]), cF = find(cols, ["배송비금액"]), cP = find(cols, ["수령자휴대폰번호"]);
       const miss2 = Object.entries({ "배송방법(묶음/조건적용후)": cH, 배송비금액: cF, 수령자휴대폰번호: cP }).filter(([, v]) => !v).map(([k]) => k);
       if (miss2.length) notes.push("택배비를 만들지 못했습니다. 누락된 열: " + miss2.join(", "));
@@ -117,11 +125,12 @@
           const seller = s(r[c.seller]);
           const wh = r[c.msg] == null ? DEFAULT_WAREHOUSE : (maps.warehouses[s(r[c.msg])] || [DEFAULT_WAREHOUSE])[0];
           const k2 = seller + "\u0000" + wh + "\u0000" + fee;
-          if (!agg.has(k2)) agg.set(k2, { cu: maps.customers[seller], wh, fee, n: 0 });
+          if (!agg.has(k2)) agg.set(k2, { cu: maps.customers[seller], seller, wh, fee, n: 0 });
           const g = agg.get(k2); g.n++;
           fee > 0 ? paid++ : free++; sum += fee;
         }
         for (const g of agg.values()) {
+          const sh = shipStat.get(g.seller) || [g.seller, 0, 0]; sh[1] += g.n; sh[2] += g.fee * g.n; shipStat.set(g.seller, sh);
           const [code, fb] = g.wh === SHIP.NAVER_WH ? SHIP.NAVER : SHIP.DEFAULT;
           const nm = (maps.master && maps.master[code] && maps.master[code][0]) || fb;   // 이름은 [DB]품목코드 기준
           res.push(mk(g.cu, g.wh, [code, nm], g.n, g.fee * g.n, g.fee));   // 단가=건당 금액, 금액=단가×수량
@@ -136,6 +145,7 @@
       return {
         headers: H, out: res.map(o => H.map(h => (o[h] === undefined ? null : o[h]))), errors: [...errors].sort(),
         notes: [...Object.entries(skipped).map(([k, n]) => `거래처DB에 없어 제외: ${k} (${n}건)`), ...notes], info,
+        stats: { sales: [...sale.values()], ship: [...shipStat.values()] },   // 대시보드 저장용 (택배비는 ship에 별도)
       };
     },
   });
