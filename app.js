@@ -13,6 +13,11 @@ const fetchNs = async ns => {            // 1000행 제한을 넘기는 테이�
     if (data.length < 1000) return all;
   }
 };
+const fetchRecent = async (ns, n) => {   // 최신 날짜부터 n개 (대시보드용)
+  const { data, error } = await sb.from("lookup").select("k,v").eq("ns", ns).order("k", { ascending: false }).range(0, n - 1);
+  if (error) throw error;
+  return data;
+};
 const toast = (m, bad) => { const t = $("#toast"); if (t) t.innerHTML = m ? `<div class="toast ${bad ? "bad" : ""}">${esc(m)}</div>` : ""; };
 
 // ---------- 로그인 ----------
@@ -50,8 +55,8 @@ function runView(p) {
   shell(p.id + "/run", `<h2>${esc(p.name)}</h2><div class="card"><div class="row">
     <label>${esc(p.input)}<input type="file" id="file" accept=".xls,.xlsx"></label>
     <label>정산 날짜<input type="date" id="date" value="${today}"></label><button id="go">변환하기</button></div>
-    <p class="mut" style="margin:12px 0 0">파일은 이 컴퓨터의 브라우저에서만 처리되며 서버로 전송되지 않습니다.</p></div><div id="res">${prev ? prev.html : ""}</div>`);
-  if (prev) bindDownload(prev);
+    <p class="mut" style="margin:12px 0 0">파일은 이 컴퓨터의 브라우저에서만 처리되며 서버로 전송되지 않습니다.</p></div><div id="res">${prev ? prev.html : ""}</div><div id="dash"></div>`);
+  if (prev) { bindDownload(prev); if (prev.dashDate) showDash(p, prev.dashDate); }
   $("#go").onclick = async () => {
     const f = $("#file").files[0], date = $("#date").value.replace(/-/g, "");
     if (!f || !date) return toast("파일과 날짜를 선택하세요.", true);
@@ -62,18 +67,33 @@ function runView(p) {
       const maps = {};
       for (const t of p.tables) maps[t.ns] = Object.fromEntries((await fetchNs(`${p.id}/${t.ns}`)).map(r => [r.k, r.v]));
       const r = p.run({ rows, maps, date });
+      let dashDate = null, dashMsg = "";
+      if (r.stats) {
+        if (r.errors.length) dashMsg = "매칭 실패 품목을 모두 등록하고 다시 변환하면 매출 대시보드에 반영됩니다.";
+        else {
+          const { error } = await sb.from("lookup").upsert({ ns: `${p.id}/sales`, k: date, v: [r.stats] });   // 같은 날짜는 덮어씀
+          if (error) dashMsg = "대시보드 저장에 실패했습니다: " + error.message;
+          else { dashDate = date; dashMsg = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6)} 집계를 대시보드에 저장했습니다. (같은 날짜를 다시 변환하면 덮어씁니다)`; }
+        }
+      }
       const out = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(out, XLSX.utils.aoa_to_sheet([r.headers, ...r.out]), "웹자료올리기");
       const name = p.outputName(date);
       const html = `<div class="card"><h3 style="margin-top:0" class="ok">변환 완료 · ${r.out.length}행</h3><button id="dl">${esc(name)} 받기</button>
-        ${(r.info || []).map(n => `<div class="mut" style="margin-top:10px">${esc(n)}</div>`).join("")}
+        ${(r.info || []).concat(dashMsg ? [dashMsg] : []).map(n => `<div class="mut" style="margin-top:10px">${esc(n)}</div>`).join("")}
         ${r.notes.length ? `<h4 class="err">확인 필요</h4>` + r.notes.map(n => `<div>${esc(n)}</div>`).join("") : ""}
         ${r.errors.length ? `<h4 class="err">매칭 실패 ${r.errors.length}건 (결과 파일에서 빠져 있음)</h4><table>` + r.errors.map(e =>
           `<tr><td style="white-space:normal;word-break:break-all">${esc(e)}</td><td style="white-space:nowrap;width:1%">${errBtns(p, e)}</td></tr>`).join("") + `</table><p class="mut">등록 후 같은 파일을 다시 변환하세요.</p>` : ""}</div>`;
-      last = { pid: p.id, html, out, name }; $("#res").innerHTML = html; bindDownload(last); toast("");
+      last = { pid: p.id, html, out, name, dashDate }; $("#res").innerHTML = html; bindDownload(last); toast("");
+      if (dashDate) await showDash(p, dashDate); else $("#dash").replaceChildren();
     } catch (e) { toast("변환 실패: " + (e.message || e), true); }
     $("#go").disabled = false;
   };
+}
+async function showDash(p, focus) {   // 저장된 최근 집계를 불러와 대시보드를 그림
+  const host = $("#dash"); if (!host) return;
+  try { Dashboard.mount(host, await fetchRecent(`${p.id}/sales`, 150), { weekStart: p.weekStartDay ?? 5, focus }); }
+  catch (e) { host.textContent = "대시보드를 불러오지 못했습니다: " + (e.message || e); }
 }
 function bindDownload(l) { const b = $("#dl"); if (b) b.onclick = () => XLSX.writeFile(l.out, l.name); }
 
