@@ -39,6 +39,11 @@ function shell(active, body) {
 }
 
 // ---------- 변환 화면 ----------
+// 매칭 실패 품목 옆의 등록 버튼들. 이름에 '+'나 '세트'가 있으면 해당 버튼을 진하게(권장) 표시
+function errBtns(p, e) {
+  const links = p.errorLinks || [], pri = links.find(l => l.when && l.when.test(e)) || links[0];
+  return links.map(l => `<a class="btn sm ${l === pri ? "" : "ghost"}" href="#/${p.id}/t/${l.ns}?new=${encodeURIComponent(e)}">${esc(l.label)}</a>`).join(" ");
+}
 function runView(p) {
   const today = new Date().toISOString().slice(0, 10);
   const prev = last && last.pid === p.id ? last : null;
@@ -64,7 +69,7 @@ function runView(p) {
         ${(r.info || []).map(n => `<div class="mut" style="margin-top:10px">${esc(n)}</div>`).join("")}
         ${r.notes.length ? `<h4 class="err">확인 필요</h4>` + r.notes.map(n => `<div>${esc(n)}</div>`).join("") : ""}
         ${r.errors.length ? `<h4 class="err">매칭 실패 ${r.errors.length}건 (결과 파일에서 빠져 있음)</h4><table>` + r.errors.map(e =>
-          `<tr><td>${esc(e)}</td><td style="width:80px"><a href="#/${p.id}/t/${p.errorTable}?new=${encodeURIComponent(e)}">등록</a></td></tr>`).join("") + `</table><p class="mut">등록 후 같은 파일을 다시 변환하세요.</p>` : ""}</div>`;
+          `<tr><td style="white-space:normal;word-break:break-all">${esc(e)}</td><td style="white-space:nowrap;width:1%">${errBtns(p, e)}</td></tr>`).join("") + `</table><p class="mut">등록 후 같은 파일을 다시 변환하세요.</p>` : ""}</div>`;
       last = { pid: p.id, html, out, name }; $("#res").innerHTML = html; bindDownload(last); toast("");
     } catch (e) { toast("변환 실패: " + (e.message || e), true); }
     $("#go").disabled = false;
@@ -73,6 +78,7 @@ function runView(p) {
 function bindDownload(l) { const b = $("#dl"); if (b) b.onclick = () => XLSX.writeFile(l.out, l.name); }
 
 // ---------- 매핑 관리 화면 ----------
+const LIMIT = 40;   // 후보 목록에 한 번에 보여줄 최대 개수 (목록은 스크롤)
 async function tableView(p, t, q) {
   shell(`${p.id}/t/${t.ns}`, `<h2>${esc(t.title)}</h2><div class="card">로딩 중...</div>`);
   const ns = `${p.id}/${t.ns}`, ro = !!t.readonly;
@@ -94,9 +100,9 @@ async function tableView(p, t, q) {
   const importCard = t.import ? `<div class="card"><div class="mut" style="margin-bottom:8px">${esc(t.import.label)} — 전체 목록을 올리면 기존 데이터와 비교해 신규·변경·삭제를 반영합니다</div>
     <div class="row"><input type="file" id="imp" accept=".xlsx,.xls"><button id="impgo">비교하기</button></div><div id="impres" style="margin-top:12px"></div></div>` : "";
   const pickCard = t.pick ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 선택하면 아래 입력칸이 자동으로 채워집니다" : `기초자료가 비어 있습니다. 먼저 <a href="#/${p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
-    <input id="pq" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div id="pr"></div></div>` : "";
+    <input id="pq" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div id="pr" class="plist"></div></div>` : "";
   const formCard = ro ? "" : `<div class="card"><div class="mut" style="margin-bottom:8px">추가 / 수정 — 첫 번째 값이 같으면 덮어씁니다</div><form id="f" class="row">
-      ${t.fields.map((fl, i) => `<label>${esc(fl.l)}${fl.lines ? `<textarea rows="3" name="f${i}" ${fl.suggest ? 'style="width:min(460px,90vw)"' : 'cols="34"'}></textarea>${fl.suggest ? '<div id="sgbox"></div><div id="sgwarn" class="err" style="font-size:12.5px"></div>' : ""}` : `<input name="f${i}" ${i === 0 ? `style="width:280px" value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>`;
+      ${t.fields.map((fl, i) => `<label style="flex:${fl.lines ? "1 1 100%" : i === 0 || /품목명/.test(fl.l) ? "2 1 420px" : "1 1 160px"}">${esc(fl.l)}${fl.lines ? `<textarea rows="5" name="f${i}" style="width:100%"></textarea>${fl.suggest ? '<div id="sgbox" class="plist"></div><div id="sgwarn" class="err" style="font-size:12.5px"></div>' : ""}` : `<input name="f${i}" style="width:100%" ${i === 0 ? `value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>`;
   $("main").innerHTML = `<div id="toast"></div><h2>${esc(t.title)} <span class="mut" id="cnt" style="font-size:13px;font-weight:400"></span></h2>${importCard}
     <div class="card"><input id="q" placeholder="검색" style="width:100%"></div>${pickCard}${formCard}
     <div class="card wrap"><table><tr>${t.fields.map(fl => `<th>${esc(fl.l)}</th>`).join("")}${ro ? "" : "<th></th>"}</tr><tbody id="rows"></tbody></table></div>`;
@@ -110,8 +116,9 @@ async function tableView(p, t, q) {
     const cur = () => { const v = ta.value, pos = ta.selectionStart, s = v.lastIndexOf("\n", pos - 1) + 1; let e = v.indexOf("\n", pos); if (e < 0) e = v.length; return { v, s, e, line: v.slice(s, e).trim() }; };
     sgRefresh = () => {
       const { line } = cur(), tk = line.toLowerCase().split(/\s+/).filter(Boolean);
-      hit = tk.length && !known.has(line) ? names.filter(n => { const h = n.toLowerCase(); return tk.every(x => h.includes(x)); }).slice(0, 8) : [];
-      box.innerHTML = hit.map((n, i) => `<div class="pick" data-i="${i}">${esc(n)}</div>`).join("");
+      hit = tk.length && !known.has(line) ? names.filter(n => { const h = n.toLowerCase(); return tk.every(x => h.includes(x)); }) : [];
+      const more = hit.length - LIMIT; hit = hit.slice(0, LIMIT);
+      box.innerHTML = hit.map((n, i) => `<div class="pick" data-i="${i}">${esc(n)}</div>`).join("") + (more > 0 ? `<div class="mut" style="padding:6px 10px">외 ${more}건 — 단어를 더 입력해 좁혀 보세요</div>` : "");
       const bad = ta.value.split("\n").map(x => x.trim()).filter(x => x && !known.has(x));
       warn.textContent = bad.length ? "[DB]품목매칭에 없는 이름: " + bad.join(", ") : "";
       box.querySelectorAll(".pick").forEach(el => el.onmousedown = ev => {
@@ -127,8 +134,9 @@ async function tableView(p, t, q) {
     const usable = master.filter(r => r.v[3] !== "NO"); let hit = [];
     $("#pq").oninput = e => {
       const tk = e.target.value.toLowerCase().split(/\s+/).filter(Boolean);
-      hit = tk.length ? usable.filter(r => { const h = `${r.k} ${r.v[0]} ${r.v[2] || ""}`.toLowerCase(); return tk.every(x => h.includes(x)); }).slice(0, 8) : [];
-      $("#pr").innerHTML = hit.map((r, i) => `<div class="pick" data-i="${i}"><b>${esc(r.v[0])}</b> <span class="mut">${esc(r.k)}</span></div>`).join("");
+      hit = tk.length ? usable.filter(r => { const h = `${r.k} ${r.v[0]} ${r.v[2] || ""}`.toLowerCase(); return tk.every(x => h.includes(x)); }) : [];
+      const more = hit.length - LIMIT; hit = hit.slice(0, LIMIT);
+      $("#pr").innerHTML = hit.map((r, i) => `<div class="pick" data-i="${i}"><b>${esc(r.v[0])}</b> <span class="mut">${esc(r.k)}</span></div>`).join("") + (more > 0 ? `<div class="mut" style="padding:6px 10px">외 ${more}건 — 단어를 더 입력해 좁혀 보세요</div>` : "");
       document.querySelectorAll(".pick").forEach(el => el.onclick = () => {
         const r = hit[el.dataset.i];
         for (const [i, src] of Object.entries(t.pick.fill)) $("#f")["f" + i].value = src === "k" ? r.k : r.v[0];
@@ -174,6 +182,7 @@ async function tableView(p, t, q) {
     e.target.reset(); sgRefresh(); toast("저장했습니다."); draw($("#q").value);
   };
   draw();
+  if (preset) { const fo = $("#pq") || (sgf && $("#f") && $("#f")["f" + t.fields.indexOf(sgf)]); if (fo) fo.focus(); }
 }
 
 // ---------- 라우팅 ----------
