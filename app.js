@@ -61,6 +61,7 @@ function runView(p) {
       XLSX.utils.book_append_sheet(out, XLSX.utils.aoa_to_sheet([r.headers, ...r.out]), "웹자료올리기");
       const name = p.outputName(date);
       const html = `<div class="card"><h3 style="margin-top:0" class="ok">변환 완료 · ${r.out.length}행</h3><button id="dl">${esc(name)} 받기</button>
+        ${(r.info || []).map(n => `<div class="mut" style="margin-top:10px">${esc(n)}</div>`).join("")}
         ${r.notes.length ? `<h4 class="err">확인 필요</h4>` + r.notes.map(n => `<div>${esc(n)}</div>`).join("") : ""}
         ${r.errors.length ? `<h4 class="err">매칭 실패 ${r.errors.length}건 (결과 파일에서 빠져 있음)</h4><table>` + r.errors.map(e =>
           `<tr><td>${esc(e)}</td><td style="width:80px"><a href="#/${p.id}/t/${p.errorTable}?new=${encodeURIComponent(e)}">등록</a></td></tr>`).join("") + `</table><p class="mut">등록 후 같은 파일을 다시 변환하세요.</p>` : ""}</div>`;
