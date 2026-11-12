@@ -79,8 +79,9 @@
       }
 
       // ---------- 택배비 행 ----------
-      // 규칙: ① 기타메세지가 '광명'인 행 제외 → ② 수령자휴대폰번호 중복은 1건으로(선결제 행 우선) → ③ 배송방법이 '선결제'이면 배송비금액 입력
-      //       테무(필품)은 배송비금액이 0이 아니면 3,000원 고정. 출하창고가 00279이면 품목코드 02096.
+      // ① 기타메세지가 '광명'인 행 제외 → ② 수령자휴대폰번호 중복은 1건으로(선결제 행 우선)
+      // ③ 선결제는 배송비금액(테무(필품)은 0이 아니면 3,000원), 무료배송은 0원 → ④ 판매자ID별칭·출하창고·금액이 모두 같은 건끼리만 합산: 수량=건수, 단가=그 금액(평균 아님)
+      // 출하창고가 00279이면 품목코드 02096, 아니면 01921. 금액이 다르면 별도 행 (무료 0원도 별도 행)
       const info = [], notes = [];
       const cH = find(cols, ["조건적용후", "배송방법(묶음"]), cF = find(cols, ["배송비금액"]), cP = find(cols, ["수령자휴대폰번호"]);
       const miss2 = Object.entries({ "배송방법(묶음/조건적용후)": cH, 배송비금액: cF, 수령자휴대폰번호: cP }).filter(([, v]) => !v).map(([k]) => k);
@@ -95,24 +96,36 @@
           if (!groups.has(key)) groups.set(key, []);
           groups.get(key).push(r);
         }
-        let n = 0, sum = 0, dupRows = 0, noPhone = 0;
+        const agg = new Map(), otherH = {};
+        let dupRows = 0, noPhone = 0, badFee = 0, paid = 0, free = 0, sum = 0;
         for (const [key, list] of groups) {
           if (key.startsWith("__none")) noPhone++;
           dupRows += list.length - 1;
           if (new Set(list.map(r => s(r[c.seller]))).size > 1) notes.push(`같은 번호(${key})가 여러 판매처에 있어 택배비를 1건만 만들었습니다.`);
-          const r = list.find(x => s(x[cH]) === "선결제");               // 선결제 행 우선
-          if (!r) continue;
-          let fee = Math.trunc(Number(r[cF]));
-          if (s(r[c.seller]) === SHIP.TEMU && fee !== 0) fee = SHIP.TEMU_FEE;
-          if (!Number.isFinite(fee) || fee <= 0) continue;
+          const r = list.find(x => s(x[cH]) === "선결제") || list.find(x => s(x[cH]) === "무료배송") || list[0];   // 선결제 행 우선
+          const h = s(r[cH]); let fee;
+          if (h === "선결제") {
+            fee = Math.trunc(Number(r[cF]));
+            if (!Number.isFinite(fee)) { badFee++; continue; }
+            if (s(r[c.seller]) === SHIP.TEMU && fee !== 0) fee = SHIP.TEMU_FEE;
+          } else if (h === "무료배송") fee = 0;
+          else { otherH[h || "(빈 값)"] = (otherH[h || "(빈 값)"] || 0) + 1; continue; }
+          const seller = s(r[c.seller]);
           const wh = r[c.msg] == null ? DEFAULT_WAREHOUSE : (maps.warehouses[s(r[c.msg])] || [DEFAULT_WAREHOUSE])[0];
-          const [code, fb] = wh === SHIP.NAVER_WH ? SHIP.NAVER : SHIP.DEFAULT;
-          const nm = (maps.master && maps.master[code] && maps.master[code][0]) || fb;   // 이름은 [DB]품목코드 기준
-          res.push(mk(maps.customers[s(r[c.seller])], wh, [code, nm], 1, fee, fee));
-          n++; sum += fee;
+          const k2 = seller + "\u0000" + wh + "\u0000" + fee;
+          if (!agg.has(k2)) agg.set(k2, { cu: maps.customers[seller], wh, fee, n: 0 });
+          const g = agg.get(k2); g.n++;
+          fee > 0 ? paid++ : free++; sum += fee;
         }
-        info.push(`택배비 ${n}건 · 합계 ${sum.toLocaleString()}원 (같은 번호 중복 ${dupRows}행 합침${gm ? `, 광명 ${gm}행 제외` : ""})`);
+        for (const g of agg.values()) {
+          const [code, fb] = g.wh === SHIP.NAVER_WH ? SHIP.NAVER : SHIP.DEFAULT;
+          const nm = (maps.master && maps.master[code] && maps.master[code][0]) || fb;   // 이름은 [DB]품목코드 기준
+          res.push(mk(g.cu, g.wh, [code, nm], g.n, g.fee * g.n, g.fee));   // 단가=건당 금액, 금액=단가×수량
+        }
+        info.push(`택배비 ${agg.size}행 (판매처·창고·금액이 같은 건끼리 합산) · 배송 ${paid + free}건 = 유료 ${paid} + 무료 ${free} · 합계 ${sum.toLocaleString()}원 (같은 번호 중복 ${dupRows}행 합침${gm ? `, 광명 ${gm}행 제외` : ""})`);
         if (noPhone) notes.push(`수령자휴대폰번호가 비어 있는 행이 ${noPhone}건 있어 중복 확인 없이 각각 처리했습니다.`);
+        if (badFee) notes.push(`배송비금액이 숫자가 아닌 선결제 ${badFee}건은 택배비에서 제외했습니다.`);
+        for (const [h, n] of Object.entries(otherH)) notes.push(`배송방법이 '${h}'인 ${n}건은 택배비에서 제외했습니다. (선결제·무료배송만 처리)`);
         if (!maps.master || !maps.master[SHIP.DEFAULT[0]] || !maps.master[SHIP.NAVER[0]]) notes.push("[DB]품목코드에 01921 또는 02096이 없습니다. 품목코드 엑셀을 먼저 올려주세요(임시 품목명으로 입력됨).");
       }
       res.sort((a, b) => (a.거래처코드 < b.거래처코드 ? -1 : a.거래처코드 > b.거래처코드 ? 1 : a.출하창고 < b.출하창고 ? -1 : a.출하창고 > b.출하창고 ? 1 : 0));
