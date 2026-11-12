@@ -28,7 +28,11 @@
     name: "EMP → 이카운트 매출",
     input: "EMP 정산 파일 (.xls / .xlsx)",
     outputName: d => `${d}_이카운트정산.xlsx`,
-    errorTable: "products", // 매칭 실패 품목에서 '등록' 링크가 열릴 매핑 테이블
+    // 매칭 실패 품목 옆에 표시할 등록 버튼. 이름에 '+'·'세트'가 있으면 특별매칭 버튼이 진하게(권장) 표시됨
+    errorLinks: [
+      { label: "품목매칭등록", ns: "products" },
+      { label: "특별매칭등록", ns: "sets", when: /[+＋]|세트|set\b|\bset/i },
+    ],
     runLabel: "정산파일 업로드",
     dbLabel: "DB관리",
     tables: [
