@@ -47,7 +47,7 @@ function shell(active, body) {
 // 매칭 실패 품목 옆의 등록 버튼들. 이름에 '+'나 '세트'가 있으면 해당 버튼을 진하게(권장) 표시
 function errBtns(p, e) {
   const links = p.errorLinks || [], pri = links.find(l => l.when && l.when.test(e)) || links[0];
-  return links.map(l => `<a class="btn sm ${l === pri ? "" : "ghost"}" href="#/${p.id}/t/${l.ns}?new=${encodeURIComponent(e)}">${esc(l.label)}</a>`).join(" ");
+  return links.map(l => `<a class="btn sm ${l === pri ? "" : "ghost"}" href="#/${p.id}/t/${l.ns}?new=${encodeURIComponent(p.errorKey ? p.errorKey(e) : e)}">${esc(l.label)}</a>`).join(" ");
 }
 function runView(p) {
   const today = new Date().toISOString().slice(0, 10);
@@ -77,11 +77,14 @@ function runView(p) {
         }
       }
       const out = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(out, XLSX.utils.aoa_to_sheet([r.headers, ...r.out]), "웹자료올리기");
+      const ws = XLSX.utils.aoa_to_sheet([r.headers, ...r.out]);
+      for (const [ci, z] of Object.entries(r.numFmt || {})) r.out.forEach((_, ri) => { const cell = ws[XLSX.utils.encode_cell({ r: ri + 1, c: +ci })]; if (cell && cell.t === "n") cell.z = z; });
+      XLSX.utils.book_append_sheet(out, ws, "웹자료올리기");
       const name = p.outputName(date);
       const html = `<div class="card"><h3 style="margin-top:0" class="ok">변환 완료 · ${r.out.length}행</h3><button id="dl">${esc(name)} 받기</button>
         ${(r.info || []).concat(dashMsg ? [dashMsg] : []).map(n => `<div class="mut" style="margin-top:10px">${esc(n)}</div>`).join("")}
         ${r.notes.length ? `<h4 class="err">확인 필요</h4>` + r.notes.map(n => `<div>${esc(n)}</div>`).join("") : ""}
+        ${(r.warns || []).length ? `<h4 class="err">경고 ${r.warns.length}건</h4><table>` + r.warns.map(w => `<tr><td style="white-space:normal;word-break:break-all">${esc(w.text)}</td><td style="white-space:nowrap;width:1%"><a class="btn sm" href="#/${p.id}/t/${w.ns}?new=${encodeURIComponent(w.key)}">${esc(w.label || "수정")}</a></td></tr>`).join("") + `</table>` : ""}
         ${r.errors.length ? `<h4 class="err">매칭 실패 ${r.errors.length}건 (결과 파일에서 빠져 있음)</h4><table>` + r.errors.map(e =>
           `<tr><td style="white-space:normal;word-break:break-all">${esc(e)}</td><td style="white-space:nowrap;width:1%">${errBtns(p, e)}</td></tr>`).join("") + `</table><p class="mut">등록 후 같은 파일을 다시 변환하세요.</p>` : ""}</div>`;
       last = { pid: p.id, html, out, name, dashDate }; $("#res").innerHTML = html; bindDownload(last); toast("");
@@ -107,13 +110,19 @@ async function tableView(p, t, q) {
   shell(`${p.id}/t/${t.ns}`, `<h2>${esc(t.title)}</h2><div class="card">로딩 중...</div>`);
   const ns = `${p.id}/${t.ns}`, ro = !!t.readonly;
   let rows, master = [], names = [];
-  try { rows = await fetchNs(ns); if (t.pick) master = await fetchNs(`${p.id}/${t.pick.ns}`);
+  try { rows = await fetchNs(ns);
+    if (t.seed) {   // 설정 기본값이 없으면 처음 열 때 자동 입력
+      const add = t.seed.filter(([k]) => !rows.some(r => r.k === k)).map(([k, ...v]) => ({ ns, k, v }));
+      if (add.length) { const { error } = await sb.from("lookup").upsert(add); if (error) throw error; rows = [...rows, ...add.map(({ k, v }) => ({ k, v }))].sort((a, b) => (a.k < b.k ? -1 : 1)); }
+    }
+    if (t.pick) master = await fetchNs(`${p.id}/${t.pick.ns}`);
     const sgf0 = t.fields.find(fl => fl.suggest); if (sgf0) names = (await fetchNs(`${p.id}/${sgf0.suggest}`)).map(r => r.k); } catch (e) { return toast("불러오기 실패: " + e.message, true); }
   const preset = new URLSearchParams(q).get("new") || "";
   const draw = (filter = "") => {
     const f = filter.toLowerCase(), shown = rows.filter(r => !f || (r.k + " " + r.v.join(" ")).toLowerCase().includes(f)).slice(0, 200);
-    $("#rows").innerHTML = shown.map(r => `<tr><td>${esc(r.k)}</td>${r.v.map(x => `<td>${esc(x)}</td>`).join("")}${ro ? "" : `<td style="width:60px"><button class="del" data-k="${esc(r.k)}">삭제</button></td>`}</tr>`).join("") || `<tr><td class="mut">결과 없음</td></tr>`;
+    $("#rows").innerHTML = shown.map(r => `<tr><td>${esc(r.k)}</td>${r.v.map(x => `<td>${esc(x)}</td>`).join("")}${ro ? "" : `<td style="width:120px;white-space:nowrap"><button class="btn sm ghost ed" data-k="${esc(r.k)}">수정</button> <button class="del" data-k="${esc(r.k)}">삭제</button></td>`}</tr>`).join("") || `<tr><td class="mut">결과 없음</td></tr>`;
     $("#cnt").textContent = `전체 ${rows.length}행` + (shown.length === 200 ? " · 200행까지 표시, 검색을 이용하세요" : "");
+    document.querySelectorAll(".ed").forEach(b => b.onclick = () => { fillForm(b.dataset.k); });
     document.querySelectorAll(".del").forEach(b => b.onclick = async () => {
       if (!confirm("삭제할까요?")) return;
       const { error } = await sb.from("lookup").delete().eq("ns", ns).eq("k", b.dataset.k);
@@ -127,11 +136,16 @@ async function tableView(p, t, q) {
     <input id="pq" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div id="pr" class="plist"></div></div>` : "";
   const formCard = ro ? "" : `<div class="card"><div class="mut" style="margin-bottom:8px">추가 / 수정 — 첫 번째 값이 같으면 덮어씁니다</div><form id="f" class="row">
       ${t.fields.map((fl, i) => `<label style="flex:${fl.lines ? "1 1 100%" : i === 0 || /품목명/.test(fl.l) ? "2 1 420px" : "1 1 160px"}">${esc(fl.l)}${fl.lines ? `<textarea rows="5" name="f${i}" style="width:100%"></textarea>${fl.suggest ? '<div id="sgbox" class="plist"></div><div id="sgwarn" class="err" style="font-size:12.5px"></div>' : ""}` : `<input name="f${i}" style="width:100%" ${i === 0 ? `value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>`;
-  $("main").innerHTML = `<div id="toast"></div><h2>${esc(t.title)} <span class="mut" id="cnt" style="font-size:13px;font-weight:400"></span></h2>${importCard}
+  $("main").innerHTML = `<div id="toast"></div><h2>${esc(t.title)} <span class="mut" id="cnt" style="font-size:13px;font-weight:400"></span></h2>${t.note ? `<p class="mut" style="margin:-4px 0 12px">${esc(t.note)}</p>` : ""}${importCard}
     <div class="card"><input id="q" placeholder="검색" style="width:100%"></div>${pickCard}${formCard}
     <div class="card wrap"><table><tr>${t.fields.map(fl => `<th>${esc(fl.l)}</th>`).join("")}${ro ? "" : "<th></th>"}</tr><tbody id="rows"></tbody></table></div>`;
   $("#q").oninput = e => draw(e.target.value);
 
+  function fillForm(k) {   // 기존 행을 입력칸에 불러와 수정
+    const r = rows.find(x => x.k === k), f = $("#f"); if (!r || !f) return;
+    [r.k, ...r.v].forEach((v, i) => { if (f["f" + i]) f["f" + i].value = v ?? ""; });
+    f.scrollIntoView({ block: "center", behavior: "smooth" }); if (f.f0) f.f0.focus();
+  }
   let sgRefresh = () => {};
   const sgf = t.fields.find(fl => fl.suggest);
   if (sgf && !ro) {   // 커서가 있는 줄을 기준으로 부분 일치 후보 표시 → 선택하면 그 줄을 교체
@@ -206,6 +220,7 @@ async function tableView(p, t, q) {
     e.target.reset(); sgRefresh(); toast("저장했습니다."); draw($("#q").value);
   };
   draw();
+  if (preset && rows.some(r => r.k === preset)) fillForm(preset);
   if (preset) { const fo = $("#pq") || (sgf && $("#f") && $("#f")["f" + t.fields.indexOf(sgf)]); if (fo) fo.focus(); }
 }
 
