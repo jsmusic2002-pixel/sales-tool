@@ -37,6 +37,7 @@
 .viz-nav button{background:none;color:var(--tx);border:1px solid var(--line);padding:3px 10px;font-size:13px}.viz-nav button:disabled{opacity:.35;cursor:default}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}.tile{flex:1 1 150px;border:1px solid var(--line);border-radius:10px;padding:10px 14px}
 .tile .l{font-size:12.5px;color:var(--mut)}.tile .v{font-size:22px;font-weight:600;margin-top:2px}
+.viz-manage{margin-top:18px;border-top:1px solid var(--line);padding-top:10px}.viz-manage summary{cursor:pointer;font-size:13.5px;color:var(--mut)}.viz-manage button.del{background:none;border:1px solid var(--line);color:#c0392b;padding:2px 10px;font-size:12.5px}.viz-manage td.n,.viz-manage th.n{text-align:right}
 .viz-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:20px}.viz-grid.two{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
 @media(max-width:820px){.viz-grid{grid-template-columns:minmax(0,1fr)}}
 .viz-sub{font-size:12.5px;color:var(--mut);margin:0 0 6px}
@@ -54,9 +55,9 @@
   const injectCss = () => { if (!document.getElementById("viz-css")) { const s = document.createElement("style"); s.id = "viz-css"; s.textContent = CSS; document.head.append(s); } };
 
   // ---------- 세로 막대 그래프 (한 가지 색, 선택한 막대만 강조) ----------
-  function columnChart(host, items, selKey, onSel, tip) {
+  function columnChart(host, items, selKey, onSel, tip, height) {
     host.replaceChildren();
-    const W = Math.max(280, Math.floor(host.clientWidth || 640)), H = 250, m = { l: 48, r: 8, t: 24, b: 42 };
+    const W = Math.max(280, Math.floor(host.clientWidth || 640)), H = height || 250, m = { l: 48, r: 8, t: 24, b: 42 };
     const pw = W - m.l - m.r, ph = H - m.t - m.b, n = items.length, band = pw / n;
     const max = Math.max(0, ...items.map(i => i.value || 0));
     const step = max > 0 ? niceStep(max / 4) : 1, top = max > 0 ? step * Math.ceil(max / step - 1e-9) : 1;
@@ -180,33 +181,39 @@
       h("div", { class: "viz-head" }, h("h3", null, "매출 현황"), h("label", null, "쇼핑몰", select),
         h("span", { class: "mut", style: "font-size:12.5px" }, "부가세 포함 판매가 · 매출·TOP3는 택배비 제외, 택배비는 별도 표시")),
       body, tipEl);
-    host.append(card);
 
     const weekKeys = ws => Array.from({ length: 7 }, (_, i) => toKey(ws + i * DAY));
     const tile = (l, v) => h("div", { class: "tile" }, h("div", { class: "l" }, l), h("div", { class: "v" }, v));
 
-    function section(kind) {
+    // 일별/주간 막대 그래프용 데이터 (shop이 ""이면 모든 쇼핑몰 합계)
+    function series(kind, shop) {
       const isDay = kind === "day", N = isDay ? NDAY : NWEEK, endMs = isDay ? st.dayEnd : st.weekEnd, span = isDay ? DAY : 7 * DAY;
       const selKey = isDay ? st.selDay : st.selWeek;
       const items = [], first = isDay ? toMs(keys[0]) : startOf(toMs(keys[0]));        // 가장 오래된 저장 날짜(주)
       for (let i = N - 1; i >= 0; i--) {
         if (endMs - i * span < first) continue;                                       // 데이터가 시작되기 전 기간은 건너뜀
-        const ms = endMs - i * span, ks = isDay ? [toKey(ms)] : weekKeys(ms), s = summarize(ks, st.shop), partial = !isDay && s.n < 7;
+        const ms = endMs - i * span, ks = isDay ? [toKey(ms)] : weekKeys(ms), s = summarize(ks, shop), partial = !isDay && s.n < 7;
         items.push({ key: toKey(ms), ms, s, value: s.n ? s.amt : null,
           label: md(ms), sub: isDay ? DOW[new Date(ms).getUTCDay()] : (partial ? `${s.n}/7일` : "~" + md(ms + 6 * DAY)),
           title: isDay ? mdw(ms) : `${mdw(ms)} ~ ${mdw(ms + 6 * DAY)}`,
           rows: s.n ? [["판매 수량", NF.format(s.qty) + "개"], ["택배비(별도)", won(s.ship)]].concat(partial ? [["집계된 일수", `${s.n}/7일 (일부만 저장됨)`]] : []) : [] });
       }
-      const selMs = toMs(selKey), ks = isDay ? [selKey] : weekKeys(selMs), cur = summarize(ks, st.shop);
+      const selMs = toMs(selKey), cur = summarize(isDay ? [selKey] : weekKeys(selMs), shop);
+      return { isDay, N, endMs, span, selKey, selMs, items, first, cur };
+    }
+    const pickSel = (isDay, k) => { if (isDay) st.selDay = k; else st.selWeek = k; render(); };
+
+    function section(kind) {
+      const { isDay, N, endMs, span, selKey, selMs, items, first, cur } = series(kind, st.shop);
       const nextDisabled = isDay ? endMs >= latest : endMs >= latestW, prevDisabled = endMs - (N - 1) * span <= first;
       const shift = dir => { if (isDay) st.dayEnd = Math.min(latest, st.dayEnd + dir * 7 * DAY); else st.weekEnd = Math.min(latestW, st.weekEnd + dir * 28 * DAY); render(); };
       const chart = h("div", { class: "viz-chart" }), rank = h("div"), t3 = h("div", { class: "viz-grid two", style: "margin-top:14px" });
       const sec = h("section", { class: "viz-sec", "aria-label": isDay ? "일별 매출 현황" : "주간 매출 현황" },
         h("div", { class: "viz-top" }, h("h4", null, isDay ? "일별 매출 현황" : "주간 매출 현황"),
           h("span", { class: "mut" }, isDay ? `최근 ${N}일` : `최근 ${N}주 · ${DOW[weekStart]}요일 ~ ${DOW[(weekStart + 6) % 7]}요일 기준`),
-          h("div", { class: "viz-nav" }, h("button", { type: "button", disabled: prevDisabled, onclick: () => shift(-1) }, "◀ 이전"), h("button", { type: "button", disabled: nextDisabled, onclick: () => shift(1) }, "다음 ▶"))),
+          h("div", { class: "viz-nav" }, isDay ? h("button", { type: "button", disabled: !cur.n, title: "선택한 날짜의 모든 쇼핑몰 성과를 한 장의 이미지(PNG)로 저장합니다", onclick: () => downloadDayImage(selKey) }, "전체 쇼핑몰 이미지 저장") : null, h("button", { type: "button", disabled: prevDisabled, onclick: () => shift(-1) }, "◀ 이전"), h("button", { type: "button", disabled: nextDisabled, onclick: () => shift(1) }, "다음 ▶"))),
         h("div", { class: "tiles" },
-          tile(isDay ? `${mdw(selMs)} 매출` : `${md(selMs)} ~ ${md(selMs + 6 * DAY)} 매출`, cur.n ? won(cur.amt) : "데이터 없음"),
+          tile(isDay ? `${mdw(selMs)} 매출` : `${md(selMs)} ~ ${md(selMs + 6 * DAY)} 매출${cur.n < 7 ? ` · ${cur.n}/7일 집계` : ""}`, cur.n ? won(cur.amt) : "데이터 없음"),
           tile("판매 수량", cur.n ? NF.format(cur.qty) + "개" : "–"),
           tile("택배비 (별도)", cur.n ? `${won(cur.ship)} · ${NF.format(cur.shipN)}건` : "–")),
         h("div", { class: "viz-grid" },
@@ -218,16 +225,104 @@
           items.map(it => h("tr", null, h("td", null, it.title), h("td", { class: "n" }, it.value == null ? "–" : won(it.value)), h("td", { class: "n" }, it.s.n ? NF.format(it.s.qty) : "–"),
             h("td", { class: "n" }, it.s.n ? won(it.s.ship) : "–"), h("td", { class: "n" }, isDay ? (it.s.n ? "1/1" : "0/1") : `${it.s.n}/7`)))))));
       return { sec, draw() {
-        columnChart(chart, items, selKey, k => { if (isDay) st.selDay = k; else st.selWeek = k; render(); }, tip);
+        columnChart(chart, items, selKey, k => pickSel(isDay, k), tip);
         shopRank(rank, cur.shops, st.shop, s => { st.shop = s; select.value = s; render(); });
         top3(t3, cur.products);
       } };
     }
 
+    // 전체 쇼핑몰 합계 (쇼핑몰 선택과 상관없이 항상 모든 쇼핑몰) — 일별·주간 요약
+    const totalGrid = h("div", { class: "viz-grid two" });
+    const totalCard = h("div", { class: "card viz-root" },
+      h("div", { class: "viz-head" }, h("h3", null, "전체 쇼핑몰 총 매출"), h("span", { class: "mut", style: "font-size:12.5px" }, "모든 쇼핑몰 합계 · 택배비 제외 · 막대를 누르면 아래 상세 현황도 같은 날짜(주)로 바뀝니다")), totalGrid);
+    host.replaceChildren(totalCard, card);
+    function totalBlock() {
+      const parts = ["day", "week"].map(kind => {
+        const sr = series(kind, ""), partial = !sr.isDay && sr.cur.n < 7, chart = h("div", { class: "viz-chart" });
+        const label = sr.isDay ? `${mdw(sr.selMs)} 총 매출` : `${md(sr.selMs)} ~ ${md(sr.selMs + 6 * DAY)} 총 매출${partial ? ` · ${sr.cur.n}/7일 집계` : ""}`;
+        const col = h("div", null, h("h4", { style: "margin:0 0 8px;font-size:15px" }, sr.isDay ? "일별" : "주간"),
+          h("div", { class: "tile", style: "margin-bottom:8px" }, h("div", { class: "l" }, label), h("div", { class: "v" }, sr.cur.n ? won(sr.cur.amt) : "데이터 없음"),
+            h("div", { class: "l", style: "margin-top:2px" }, sr.cur.n ? `판매 ${NF.format(sr.cur.qty)}개 · 택배비(별도) ${won(sr.cur.ship)}` : "")), chart);
+        return { col, draw: () => columnChart(chart, sr.items, sr.selKey, k => pickSel(sr.isDay, k), tip, 190) };
+      });
+      totalGrid.replaceChildren(...parts.map(x => x.col)); parts.forEach(x => x.draw());
+    }
+
+    // ---------- 일별 성과 이미지 (모든 쇼핑몰, 단톡방 공유용 PNG) ----------
+    function dayImage(selKey) {
+      const ms = toMs(selKey), pk = toKey(ms - DAY), hasPrev = days.has(pk);
+      const all = summarize([selKey], "");
+      const rowsI = [{ name: "전체 쇼핑몰", s: all, p: hasPrev ? summarize([pk], "") : null, total: true }];
+      [...all.shops].filter(([, v]) => v.amt > 0).sort((a, b) => b[1].amt - a[1].amt)
+        .forEach(([name]) => rowsI.push({ name, s: summarize([selKey], name), p: hasPrev ? summarize([pk], name) : null }));
+      const maxAmt = Math.max(1, ...rowsI.slice(1).map(r => r.s.amt));
+      const S = 2, W = 1200, pad = 40, rowH = 98, top0 = 252, H = top0 + rowsI.length * rowH + 58;
+      const cv = document.createElement("canvas"); cv.width = W * S; cv.height = H * S;
+      const c = cv.getContext("2d"); c.scale(S, S);
+      const FONT = '"Pretendard","Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif';
+      const INK = "#16181d", MUT = "#6b7280", LINE = "#e5e7eb", ACC = "#2a78d6";
+      const txt = (t, x, y, size, weight, color, align = "left") => { c.font = `${weight} ${size}px ${FONT}`; c.fillStyle = color; c.textAlign = align; c.textBaseline = "alphabetic"; c.fillText(t, x, y); };
+      const fit = (t, maxW, size, weight) => { c.font = `${weight} ${size}px ${FONT}`; if (c.measureText(t).width <= maxW) return t; let a = t; while (a.length > 1 && c.measureText(a + "…").width > maxW) a = a.slice(0, -1); return a + "…"; };
+      const rr = (x, y, w, hgt, r) => { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + hgt, r); c.arcTo(x + w, y + hgt, x, y + hgt, r); c.arcTo(x, y + hgt, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); };
+      c.fillStyle = "#ffffff"; c.fillRect(0, 0, W, H);
+      // 제목
+      txt("일별 매출 현황", pad, 60, 30, 700, INK);
+      const d = new Date(ms); txt(`${d.getUTCFullYear()}년 ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 (${DOW[d.getUTCDay()]})`, W - pad, 60, 24, 600, INK, "right");
+      txt("모든 쇼핑몰 · 부가세 포함 판매가 · TOP3는 택배비 제외", pad, 90, 14, 400, MUT);
+      // 요약 타일
+      const tw = (W - 2 * pad - 32) / 3, tiles3 = [["총 매출", won(all.amt)], ["판매 수량", NF.format(all.qty) + "개"], ["택배비 (별도)", `${won(all.ship)} · ${NF.format(all.shipN)}건`]];
+      tiles3.forEach(([l, v], i) => { const x = pad + i * (tw + 16); rr(x, 114, tw, 84, 10); c.strokeStyle = LINE; c.lineWidth = 1; c.stroke(); txt(l, x + 18, 142, 14, 400, MUT); txt(v, x + 18, 178, i === 2 ? 22 : 28, 700, INK); });
+      // 표 머리글
+      const c1 = pad, c1w = 330, c2 = 410, c2w = 370, c3 = 810, c3w = 350;
+      txt("쇼핑몰 · 매출", c1, top0 - 12, 14, 600, MUT); txt("판매량 TOP3", c2, top0 - 12, 14, 600, MUT); txt("금액 TOP3", c3, top0 - 12, 14, 600, MUT);
+      c.strokeStyle = INK; c.lineWidth = 1.5; c.beginPath(); c.moveTo(pad, top0); c.lineTo(W - pad, top0); c.stroke();
+      const delta = r => { if (!r.p || !(r.p.amt > 0)) return "전일 –"; const v = Math.round((r.s.amt - r.p.amt) / r.p.amt * 100); return v > 0 ? `전일 ▲ ${v}%` : v < 0 ? `전일 ▼ ${-v}%` : "전일 0%"; };
+      const list = (x, w, y, prods, cmp, fmt) => prods.slice().sort(cmp).slice(0, 3).forEach((p, i) => {
+        const base = y + 28 + i * 26, val = fmt(p); c.font = `400 14px ${FONT}`;
+        txt(String(i + 1), x, base, 14, 400, MUT); txt(val, x + w, base, 14, 600, INK, "right");
+        txt(fit(p.name, w - 24 - c.measureText(val).width - 16, 14, 400), x + 22, base, 14, 400, INK);
+      });
+      rowsI.forEach((r, i) => {
+        const y = top0 + i * rowH;
+        if (r.total) { c.fillStyle = "#f3f6fb"; c.fillRect(pad - 8, y + 1, W - 2 * pad + 16, rowH - 1); }
+        txt(fit(r.name, c1w - 70, 17, 700), c1, y + 28, 17, 700, INK); txt(delta(r), c1 + c1w - 20, y + 28, 13, 400, MUT, "right");
+        txt(won(r.s.amt), c1, y + 54, 20, 600, INK);
+        if (!r.total) { const bw = Math.max(3, (c1w - 20) * r.s.amt / maxAmt); c.fillStyle = ACC; rr(c1, y + 62, bw, 8, 3); c.fill(); }
+        txt(`${NF.format(r.s.qty)}개 · 택배비 ${won(r.s.ship)}`, c1, y + 88, 13, 400, MUT);
+        list(c2, c2w, y, [...r.s.products.values()], (a, b) => b.qty - a.qty || b.amt - a.amt, p => NF.format(p.qty) + "개");
+        list(c3, c3w, y, [...r.s.products.values()], (a, b) => b.amt - a.amt || b.qty - a.qty, p => won(p.amt));
+        c.strokeStyle = LINE; c.lineWidth = 1; c.beginPath(); c.moveTo(pad, y + rowH); c.lineTo(W - pad, y + rowH); c.stroke();
+      });
+      txt("전일 대비는 전날 저장된 데이터가 있을 때만 표시됩니다", pad, H - 22, 12, 400, MUT);
+      return cv;
+    }
+    function downloadDayImage(selKey) {
+      dayImage(selKey).toBlob(b => {
+        const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `일별매출_${selKey}.png`;
+        document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      }, "image/png");
+    }
+
+    // ---------- 저장된 날짜 관리 (날짜별 삭제) ----------
+    const delMsg = h("p", { class: "mut", style: "margin:6px 0 0" });
+    const manage = h("details", { class: "viz-manage" }, h("summary", null, "저장된 날짜 관리 (날짜별 삭제)"),
+      h("div", { class: "wrap", style: "max-height:320px;overflow:auto" }, h("table", null,
+        h("tr", null, h("th", null, "날짜"), h("th", { class: "n" }, "매출"), h("th", { class: "n" }, "판매 수량"), h("th", null, "")),
+        keys.slice().reverse().map(k => {
+          const s = summarize([k], ""), label = `${k.slice(0, 4)}-${k.slice(4, 6)}-${k.slice(6)} (${DOW[new Date(toMs(k)).getUTCDay()]})`;
+          return h("tr", null, h("td", null, label), h("td", { class: "n" }, won(s.amt)), h("td", { class: "n" }, NF.format(s.qty) + "개"),
+            h("td", { class: "n" }, h("button", { type: "button", class: "del", onclick: async e => {
+              if (!opts.onDelete || !confirm(`${label} 집계를 삭제할까요?\n삭제한 날짜는 같은 날짜의 정산 파일을 다시 변환해야 복구됩니다.`)) return;
+              e.target.disabled = true; delMsg.textContent = "삭제 중...";
+              try { await opts.onDelete(k); } catch (err) { delMsg.textContent = "삭제 실패: " + (err.message || err); e.target.disabled = false; }
+            } }, "삭제")));
+        }))), delMsg);
+    card.append(manage);
+
     function render() {
       tip.hide();
       const a = section("day"), b = section("week");
-      body.replaceChildren(a.sec, b.sec); a.draw(); b.draw();
+      body.replaceChildren(a.sec, b.sec); totalBlock(); a.draw(); b.draw();
     }
     render();
     let timer = null;

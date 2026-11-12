@@ -92,7 +92,11 @@ function runView(p) {
 }
 async function showDash(p, focus) {   // 저장된 최근 집계를 불러와 대시보드를 그림
   const host = $("#dash"); if (!host) return;
-  try { Dashboard.mount(host, await fetchRecent(`${p.id}/sales`, 150), { weekStart: p.weekStartDay ?? 5, focus }); }
+  try { Dashboard.mount(host, await fetchRecent(`${p.id}/sales`, 150), { weekStart: p.weekStartDay ?? 5, focus,
+    onDelete: async k => {   // 날짜별 집계 삭제 후 대시보드 새로고침
+      const { error } = await sb.from("lookup").delete().eq("ns", `${p.id}/sales`).eq("k", k);
+      if (error) throw error; toast(`${k} 집계를 삭제했습니다.`); await showDash(p);
+    } }); }
   catch (e) { host.textContent = "대시보드를 불러오지 못했습니다: " + (e.message || e); }
 }
 function bindDownload(l) { const b = $("#dl"); if (b) b.onclick = () => XLSX.writeFile(l.out, l.name); }
