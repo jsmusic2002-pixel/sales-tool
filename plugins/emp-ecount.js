@@ -4,6 +4,8 @@
   const R = x => { const f = Math.floor(x), d = x - f; return d < .5 ? f : d > .5 ? f + 1 : (f % 2 === 0 ? f : f + 1); }; // 파이썬 round와 동일
   const H = ["일자","순번","거래처코드","거래처명","담당자","출하창고","거래유형","통화","환율","미수금","품목코드","품목명","수량","단가","외화금액","공급가액","부가세","적요","생산전표생성"];
   const DEFAULT_WAREHOUSE = "00260";
+  // 택배비 품목: 기본 01921, 출하창고가 00279(네이버도착보장)이면 02096
+  const SHIP = { DEFAULT: ["01921", "택배비(100물류)"], NAVER: ["02096", "택배비(CJ대한통운/오네)"], NAVER_WH: "00279", TEMU: "테무(필품)", TEMU_FEE: 3000, SKIP_MSG: "광명" };
   const find = (cols, kws) => cols.find(c => kws.some(k => String(c).includes(k)));
 
   // 이카운트 '품목등록' 엑셀 → [{k:품목코드, v:[품목명,입고단가,검색창내용,사용구분,품목그룹1명]}]
@@ -75,10 +77,48 @@
           res.push(mk(cu, wh, pr, qty, total, qty > 0 ? R(total / qty) : 0));
         }
       }
+
+      // ---------- 택배비 행 ----------
+      // 규칙: ① 기타메세지가 '광명'인 행 제외 → ② 수령자휴대폰번호 중복은 1건으로(선결제 행 우선) → ③ 배송방법이 '선결제'이면 배송비금액 입력
+      //       테무(필품)은 배송비금액이 0이 아니면 3,000원 고정. 출하창고가 00279이면 품목코드 02096.
+      const info = [], notes = [];
+      const cH = find(cols, ["조건적용후", "배송방법(묶음"]), cF = find(cols, ["배송비금액"]), cP = find(cols, ["수령자휴대폰번호"]);
+      const miss2 = Object.entries({ "배송방법(묶음/조건적용후)": cH, 배송비금액: cF, 수령자휴대폰번호: cP }).filter(([, v]) => !v).map(([k]) => k);
+      if (miss2.length) notes.push("택배비를 만들지 못했습니다. 누락된 열: " + miss2.join(", "));
+      else {
+        const groups = new Map(); let gm = 0, uid = 0;
+        for (const r of rows) {
+          const seller = s(r[c.seller]);
+          if (!maps.customers[seller]) continue;                       // 거래처DB에 없는 판매처는 상품 행과 동일하게 제외
+          if (s(r[c.msg]) === SHIP.SKIP_MSG) { gm++; continue; }       // 이미 수동으로 택배비를 입력한 건
+          const ph = s(r[cP]), key = ph || "__none" + uid++;           // 번호가 비어 있으면 합치지 않고 각각 처리
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(r);
+        }
+        let n = 0, sum = 0, dupRows = 0, noPhone = 0;
+        for (const [key, list] of groups) {
+          if (key.startsWith("__none")) noPhone++;
+          dupRows += list.length - 1;
+          if (new Set(list.map(r => s(r[c.seller]))).size > 1) notes.push(`같은 번호(${key})가 여러 판매처에 있어 택배비를 1건만 만들었습니다.`);
+          const r = list.find(x => s(x[cH]) === "선결제");               // 선결제 행 우선
+          if (!r) continue;
+          let fee = Math.trunc(Number(r[cF]));
+          if (s(r[c.seller]) === SHIP.TEMU && fee !== 0) fee = SHIP.TEMU_FEE;
+          if (!Number.isFinite(fee) || fee <= 0) continue;
+          const wh = r[c.msg] == null ? DEFAULT_WAREHOUSE : (maps.warehouses[s(r[c.msg])] || [DEFAULT_WAREHOUSE])[0];
+          const [code, fb] = wh === SHIP.NAVER_WH ? SHIP.NAVER : SHIP.DEFAULT;
+          const nm = (maps.master && maps.master[code] && maps.master[code][0]) || fb;   // 이름은 [DB]품목코드 기준
+          res.push(mk(maps.customers[s(r[c.seller])], wh, [code, nm], 1, fee, fee));
+          n++; sum += fee;
+        }
+        info.push(`택배비 ${n}건 · 합계 ${sum.toLocaleString()}원 (같은 번호 중복 ${dupRows}행 합침${gm ? `, 광명 ${gm}행 제외` : ""})`);
+        if (noPhone) notes.push(`수령자휴대폰번호가 비어 있는 행이 ${noPhone}건 있어 중복 확인 없이 각각 처리했습니다.`);
+        if (!maps.master || !maps.master[SHIP.DEFAULT[0]] || !maps.master[SHIP.NAVER[0]]) notes.push("[DB]품목코드에 01921 또는 02096이 없습니다. 품목코드 엑셀을 먼저 올려주세요(임시 품목명으로 입력됨).");
+      }
       res.sort((a, b) => (a.거래처코드 < b.거래처코드 ? -1 : a.거래처코드 > b.거래처코드 ? 1 : a.출하창고 < b.출하창고 ? -1 : a.출하창고 > b.출하창고 ? 1 : 0));
       return {
         headers: H, out: res.map(o => H.map(h => (o[h] === undefined ? null : o[h]))), errors: [...errors].sort(),
-        notes: Object.entries(skipped).map(([k, n]) => `거래처DB에 없어 제외: ${k} (${n}건)`),
+        notes: [...Object.entries(skipped).map(([k, n]) => `거래처DB에 없어 제외: ${k} (${n}건)`), ...notes], info,
       };
     },
   });
