@@ -53,20 +53,22 @@ function runView(p) {
   const today = new Date().toISOString().slice(0, 10);
   const prev = last && last.pid === p.id ? last : null;
   shell(p.id + "/run", `<h2>${esc(p.name)}</h2><div class="card"><div class="row">
-    <label>${esc(p.input)}<input type="file" id="file" accept=".xls,.xlsx"></label>
+    ${(p.inputs || [{ id: "file", label: p.input }]).map(i => `<label style="flex:1 1 100%">${esc(i.label)}<input type="file" id="in_${i.id}" accept=".xls,.xlsx" ${i.multiple ? "multiple" : ""}></label>`).join("")}
     <label>정산 날짜<input type="date" id="date" value="${today}"></label><button id="go">변환하기</button></div>
     <p class="mut" style="margin:12px 0 0">파일은 이 컴퓨터의 브라우저에서만 처리되며 서버로 전송되지 않습니다.</p></div><div id="res">${prev ? prev.html : ""}</div><div id="dash"></div>`);
   if (prev) { bindDownload(prev); if (prev.dashDate) showDash(p, prev.dashDate); }
   $("#go").onclick = async () => {
-    const f = $("#file").files[0], date = $("#date").value.replace(/-/g, "");
-    if (!f || !date) return toast("파일과 날짜를 선택하세요.", true);
+    const specs = p.inputs || [{ id: "file", required: true }], date = $("#date").value.replace(/-/g, "");
+    if (!date || specs.some(i => i.required && !$("#in_" + i.id).files.length)) return toast("필수 파일과 날짜를 선택하세요.", true);
     $("#go").disabled = true; toast("변환 중...");
     try {
-      const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: null });
+      const readFile = async f => ({ name: f.name, rows: XLSX.utils.sheet_to_json((wb => wb.Sheets[wb.SheetNames[0]])(XLSX.read(await f.arrayBuffer(), { type: "array" })), { defval: null }) });
+      const inputs = {};
+      for (const i of specs) inputs[i.id] = await Promise.all([...$("#in_" + i.id).files].map(readFile));
+      const rows = p.inputs ? null : inputs.file[0].rows;
       const maps = {};
       for (const t of p.tables) maps[t.ns] = Object.fromEntries((await fetchNs(`${p.id}/${t.ns}`)).map(r => [r.k, r.v]));
-      const r = p.run({ rows, maps, date });
+      const r = p.run({ rows, inputs, maps, date });
       let dashDate = null, dashMsg = "";
       if (r.stats) {
         if (r.errors.length) dashMsg = "매칭 실패 품목을 모두 등록하고 다시 변환하면 매출 대시보드에 반영됩니다.";
@@ -115,7 +117,7 @@ async function tableView(p, t, q) {
       const add = t.seed.filter(([k]) => !rows.some(r => r.k === k)).map(([k, ...v]) => ({ ns, k, v }));
       if (add.length) { const { error } = await sb.from("lookup").upsert(add); if (error) throw error; rows = [...rows, ...add.map(({ k, v }) => ({ k, v }))].sort((a, b) => (a.k < b.k ? -1 : 1)); }
     }
-    if (t.pick) master = await fetchNs(`${p.id}/${t.pick.ns}`);
+    if (t.pick) master = await fetchNs(`${t.pick.plugin || p.id}/${t.pick.ns}`);
     const sgf0 = t.fields.find(fl => fl.suggest); if (sgf0) names = (await fetchNs(`${p.id}/${sgf0.suggest}`)).map(r => r.k); } catch (e) { return toast("불러오기 실패: " + e.message, true); }
   const preset = new URLSearchParams(q).get("new") || "";
   // 상태별 탭 (t.tabs): 탭에 속하지 않는 값이 있으면 "기타" 탭을 추가
@@ -143,7 +145,7 @@ async function tableView(p, t, q) {
   };
   const importCard = t.import ? `<div class="card"><div class="mut" style="margin-bottom:8px">${esc(t.import.label)} — 전체 목록을 올리면 기존 데이터와 비교해 신규·변경·삭제를 반영합니다</div>
     <div class="row"><input type="file" id="imp" accept=".xlsx,.xls"><button id="impgo">비교하기</button></div><div id="impres" style="margin-top:12px"></div></div>` : "";
-  const pickCard = t.pick ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 선택하면 아래 입력칸이 자동으로 채워집니다" : `기초자료가 비어 있습니다. 먼저 <a href="#/${p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
+  const pickCard = t.pick ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 선택하면 아래 입력칸이 자동으로 채워집니다" : `기초자료가 비어 있습니다. 먼저 <a href="#/${t.pick.plugin || p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
     <input id="pq" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div id="pr" class="plist"></div></div>` : "";
   const formCard = ro ? "" : `<div class="card"><div class="mut" style="margin-bottom:8px">추가 / 수정 — 첫 번째 값이 같으면 덮어씁니다</div><form id="f" class="row">
       ${t.fields.map((fl, i) => `<label style="flex:${fl.lines ? "1 1 100%" : i === 0 || /품목명/.test(fl.l) ? "2 1 420px" : "1 1 160px"}">${esc(fl.l)}${fl.lines ? `<textarea rows="5" name="f${i}" style="width:100%"></textarea>${fl.suggest ? '<div id="sgbox" class="plist"></div><div id="sgwarn" class="err" style="font-size:12.5px"></div>' : ""}` : `<input name="f${i}" style="width:100%" ${i === 0 ? `value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>`;
@@ -198,7 +200,9 @@ async function tableView(p, t, q) {
       const file = $("#imp").files[0]; if (!file) return toast("파일을 선택하세요.", true);
       try {
         const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-        const next = t.import.parse(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: null, raw: true }));
+        const sn = !t.import.sheet || wb.SheetNames.includes(t.import.sheet) ? (t.import.sheet || wb.SheetNames[0]) : wb.SheetNames.length === 1 ? wb.SheetNames[0] : null;
+        if (!sn) throw new Error(`'${t.import.sheet}' 시트를 찾을 수 없습니다. (파일의 시트: ${wb.SheetNames.join(", ")})`);
+        const next = t.import.parse(XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null, raw: true }));
         if (!next.length) throw new Error("읽을 데이터가 없습니다.");
         const cur = new Map(rows.map(r => [r.k, JSON.stringify(r.v)])), nk = new Set(next.map(r => r.k));
         const add = next.filter(r => !cur.has(r.k)), chg = next.filter(r => cur.has(r.k) && cur.get(r.k) !== JSON.stringify(r.v)), del = rows.filter(r => !nk.has(r.k));
