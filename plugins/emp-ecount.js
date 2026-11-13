@@ -34,13 +34,18 @@
       { label: "특별매칭등록", ns: "sets", when: /[+＋]|세트|set\b|\bset/i },
     ],
     weekStartDay: 5,   // 주간 매출 기준: 금요일(5) ~ 목요일
+    dashRates: { ns: "customers", index: 2 },   // 대시보드 수수료율: [DB]거래처 v[2] (판매자ID별칭 → %)
     runLabel: "정산파일 업로드",
     dbLabel: "DB관리",
     tables: [
       { ns: "master", title: "[DB]품목코드", readonly: true,   // 이카운트 품목등록 엑셀을 통째로 올려 동기화
         fields: [{ l: "품목코드" }, { l: "품목명" }, { l: "입고단가" }, { l: "검색창내용" }, { l: "사용구분" }, { l: "품목그룹1명" }],
         import: { label: "이카운트 품목등록 엑셀 (.xlsx)", parse: parseMaster } },
-      { ns: "customers",  title: "[DB]거래처",   fields: [{ l: "판매자ID별칭" }, { l: "거래처코드" }, { l: "담당자" }] },
+      { ns: "customers",  title: "[DB]거래처",
+        fields: [{ l: "판매자ID별칭" }, { l: "거래처코드" }, { l: "담당자", ref: "managers" }, { l: "수수료(%)", number: true, suffix: "%" }],
+        note: "수수료(%)는 대시보드의 순수익 계산에 쓰입니다 (순수익 = (판매금액 + 택배비) × (1 − 수수료율) − 원가). 담당자 칸은 코드를 입력하거나 [DB]담당자에 등록된 목록에서 고를 수 있습니다." },
+      { ns: "managers",   title: "[DB]담당자",   fields: [{ l: "담당자코드" }, { l: "담당자명" }],
+        note: "담당자 코드별 이름입니다. 이름은 화면 표시용이며, 이카운트 업로드 파일에는 기존처럼 코드만 들어갑니다." },
       { ns: "warehouses", title: "[DB]창고",     fields: [{ l: "기타메세지" }, { l: "출하창고" }] },
       { ns: "products",   title: "[DB]품목매칭", fields: [{ l: "주문선택사항" }, { l: "품목코드" }, { l: "품목명" }],
         pick: { ns: "master", fill: { 1: "k", 2: "v0" } } },   // 기초자료에서 골라 품목코드·품목명 자동 입력
@@ -57,10 +62,15 @@
       const errors = new Set(), skipped = {}, res = [];
       // 대시보드 집계: [쇼핑몰(판매자ID별칭), 품목코드, 품목명, 수량, 금액(부가세 포함)] — 이카운트에 올라가는 행과 같은 값
       const sale = new Map();
+      // 원가: [DB]품목코드의 입고단가 × 수량 (입고단가가 없거나 0이면 원가 0으로 계산하고 표시해 둠)
+      const unitCost = code => { const m = maps.master && maps.master[code], x = m ? Number(String(m[1]).replace(/,/g, "")) : NaN; return x > 0 ? x : 0; };
+      const noCost = new Map();
       const addSale = (seller, row) => {
         const k = seller + "\u0000" + row.품목코드; let e = sale.get(k);
-        if (!e) sale.set(k, e = [seller, row.품목코드, row.품목명, 0, 0]);
+        if (!e) sale.set(k, e = [seller, row.품목코드, row.품목명, 0, 0, 0, 0]);
         e[3] += row.수량; e[4] += row.공급가액 + row.부가세;
+        const u = unitCost(row.품목코드); e[5] += row.수량 * u;
+        if (!u) { e[6] = 1; noCost.set(row.품목코드, row.품목명); }
       };
       const mk = (cu, wh, pr, qty, price, unit) => {
         const sup = R(price / 1.1);
@@ -130,8 +140,8 @@
           fee > 0 ? paid++ : free++; sum += fee;
         }
         for (const g of agg.values()) {
-          const sh = shipStat.get(g.seller) || [g.seller, 0, 0]; sh[1] += g.n; sh[2] += g.fee * g.n; shipStat.set(g.seller, sh);
           const [code, fb] = g.wh === SHIP.NAVER_WH ? SHIP.NAVER : SHIP.DEFAULT;
+          const sh = shipStat.get(g.seller) || [g.seller, 0, 0, 0]; sh[1] += g.n; sh[2] += g.fee * g.n; sh[3] += g.n * unitCost(code); shipStat.set(g.seller, sh);
           const nm = (maps.master && maps.master[code] && maps.master[code][0]) || fb;   // 이름은 [DB]품목코드 기준
           res.push(mk(g.cu, g.wh, [code, nm], g.n, g.fee * g.n, g.fee));   // 단가=건당 금액, 금액=단가×수량
         }
@@ -141,6 +151,7 @@
         for (const [h, n] of Object.entries(otherH)) notes.push(`배송방법이 '${h}'인 ${n}건은 택배비에서 제외했습니다. (선결제·무료배송만 처리)`);
         if (!maps.master || !maps.master[SHIP.DEFAULT[0]] || !maps.master[SHIP.NAVER[0]]) notes.push("[DB]품목코드에 01921 또는 02096이 없습니다. 품목코드 엑셀을 먼저 올려주세요(임시 품목명으로 입력됨).");
       }
+      if (noCost.size) notes.push(`입고단가가 없거나 0인 품목 ${noCost.size}개는 원가 0으로 계산되어 대시보드 순수익이 실제보다 높게 나옵니다: ${[...noCost.values()].slice(0, 6).join(", ")}${noCost.size > 6 ? " 외" : ""} ([DB]품목코드의 입고단가를 확인하세요)`);
       res.sort((a, b) => (a.거래처코드 < b.거래처코드 ? -1 : a.거래처코드 > b.거래처코드 ? 1 : a.출하창고 < b.출하창고 ? -1 : a.출하창고 > b.출하창고 ? 1 : 0));
       return {
         headers: H, out: res.map(o => H.map(h => (o[h] === undefined ? null : o[h]))), errors: [...errors].sort(),
