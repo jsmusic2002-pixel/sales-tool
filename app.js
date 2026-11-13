@@ -35,7 +35,7 @@ function loginView(msg = "") {
 
 // ---------- 레이아웃 ----------
 function shell(active, body) {
-  const nav = PLUGINS.map(p => `<div class="grp">${esc(p.name)}</div><a href="#/${p.id}/run" class="${active === p.id + "/run" ? "on" : ""}">${esc(p.runLabel || "변환")}</a>
+  const nav = PLUGINS.map(p => `<div class="grp">${esc(p.name)}</div><a href="#/${p.id}/run" class="${active === p.id + "/run" ? "on" : ""}">${esc(p.runLabel || "변환")}</a>${p.dashboard ? `<a href="#/${p.id}/dash" class="${active === p.id + "/dash" ? "on" : ""}">${esc(p.dashLabel || "대시보드")}</a>` : ""}
     <details ${active.startsWith(p.id + "/t/") ? "open" : ""}><summary>${esc(p.dbLabel || "DB관리")}</summary>` +
     p.tables.map(t => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}">${esc(t.title)}</a>`).join("") + `</details>`).join("");
   app.innerHTML = `<div class="layout"><aside><h1>매출 입력 변환</h1>${nav}
@@ -55,7 +55,7 @@ function runView(p) {
   shell(p.id + "/run", `<h2>${esc(p.name)}</h2><div class="card"><div class="row">
     ${(p.inputs || [{ id: "file", label: p.input }]).map(i => `<label style="flex:1 1 100%">${esc(i.label)}<input type="file" id="in_${i.id}" accept=".xls,.xlsx" ${i.multiple ? "multiple" : ""}></label>`).join("")}
     <label>정산 날짜<input type="date" id="date" value="${today}"></label><button id="go">변환하기</button></div>
-    <p class="mut" style="margin:12px 0 0">파일은 이 컴퓨터의 브라우저에서만 처리되며 서버로 전송되지 않습니다.</p></div><div id="res">${prev ? prev.html : ""}</div><div id="dash"></div>`);
+    <p class="mut" style="margin:12px 0 0">파일은 이 컴퓨터의 브라우저에서만 처리되며 서버로 전송되지 않습니다.</p></div><div id="res">${prev ? prev.html : ""}</div>${p.dashboard ? "" : `<div id="dash"></div>`}`);
   if (prev) { bindDownload(prev); if (prev.dashDate) showDash(p, prev.dashDate); }
   $("#go").onclick = async () => {
     const specs = p.inputs || [{ id: "file", required: true }], date = $("#date").value.replace(/-/g, "");
@@ -84,13 +84,13 @@ function runView(p) {
       XLSX.utils.book_append_sheet(out, ws, "웹자료올리기");
       const name = p.outputName(date);
       const html = `<div class="card"><h3 style="margin-top:0" class="ok">변환 완료 · ${r.out.length}행</h3><button id="dl">${esc(name)} 받기</button>
-        ${(r.info || []).concat(dashMsg ? [dashMsg] : []).map(n => `<div class="mut" style="margin-top:10px">${esc(n)}</div>`).join("")}
+        ${(r.info || []).concat(dashMsg ? [dashMsg] : []).map(n => `<div class="mut" style="margin-top:10px">${esc(n)}</div>`).join("")}${dashDate && p.dashboard ? `<p style="margin:10px 0 0"><a class="btn sm ghost" href="#/${p.id}/dash?focus=${dashDate}">대시보드에서 보기 →</a></p>` : ""}
         ${r.notes.length ? `<h4 class="err">확인 필요</h4>` + r.notes.map(n => `<div>${esc(n)}</div>`).join("") : ""}
         ${(r.warns || []).length ? `<h4 class="err">경고 ${r.warns.length}건</h4><table>` + r.warns.map(w => `<tr><td style="white-space:normal;word-break:break-all">${esc(w.text)}</td><td style="white-space:nowrap;width:1%"><a class="btn sm" href="#/${p.id}/t/${w.ns}?new=${encodeURIComponent(w.key)}">${esc(w.label || "수정")}</a></td></tr>`).join("") + `</table>` : ""}
         ${r.errors.length ? `<h4 class="err">매칭 실패 ${r.errors.length}건 (결과 파일에서 빠져 있음)</h4><table>` + r.errors.map(e =>
           `<tr><td style="white-space:normal;word-break:break-all">${esc(e)}</td><td style="white-space:nowrap;width:1%">${errBtns(p, e)}</td></tr>`).join("") + `</table><p class="mut">등록 후 같은 파일을 다시 변환하세요.</p>` : ""}</div>`;
       last = { pid: p.id, html, out, name, dashDate }; $("#res").innerHTML = html; bindDownload(last); toast("");
-      if (dashDate) await showDash(p, dashDate); else $("#dash").replaceChildren();
+      if (dashDate) await showDash(p, dashDate); else if ($("#dash")) $("#dash").replaceChildren();
     } catch (e) { toast("변환 실패: " + (e.message || e), true); }
     $("#go").disabled = false;
   };
@@ -244,12 +244,19 @@ async function tableView(p, t, q) {
   if (preset) { const fo = $("#pq") || (sgf && $("#f") && $("#f")["f" + t.fields.indexOf(sgf)]); if (fo) fo.focus(); }
 }
 
+// ---------- 대시보드 (변환 없이 언제든 열람) ----------
+function dashView(p, focus) {
+  shell(p.id + "/dash", `<h2>${esc(p.name)} · ${esc(p.dashLabel || "대시보드")}</h2><div id="dash"><div class="card mut">불러오는 중...</div></div>`);
+  showDash(p, focus);
+}
+
 // ---------- 라우팅 ----------
 async function route() {
   if (!user) return;
   const [path, q = ""] = location.hash.slice(2).split("?"), [pid, kind, ns] = path.split("/");
   const p = PLUGINS.find(x => x.id === pid) || PLUGINS[0];
   if (kind === "t" && p.tables.some(t => t.ns === ns)) return tableView(p, p.tables.find(t => t.ns === ns), q);
+  if (kind === "dash" && p.dashboard) return dashView(p, new URLSearchParams(q).get("focus") || undefined);
   runView(p);
 }
 window.addEventListener("hashchange", route);
