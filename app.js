@@ -122,6 +122,8 @@ async function tableView(p, t, q) {
     }
     for (const fl of t.fields) if (fl.ref && !refs[fl.ref]) refs[fl.ref] = Object.fromEntries((await fetchNs(`${p.id}/${fl.ref}`)).map(r => [r.k, r.v[0]]));   // 코드 → 이름
     if (t.pick) master = await fetchNs(`${t.pick.plugin || p.id}/${t.pick.ns}`);
+    // 선택 카드: t.picks = [{label, fill:{필드번호:"k"|"v0"}, save:{설정키:"k"|"v0"}}] (t.pick 은 카드 1개짜리 약식)
+    // fill = 아래 입력칸 채우기, save = 선택 즉시 해당 행(설정값)을 저장
     const sgf0 = t.fields.find(fl => fl.suggest); if (sgf0) names = (await fetchNs(`${p.id}/${sgf0.suggest}`)).map(r => r.k); } catch (e) { return toast("불러오기 실패: " + e.message, true); }
   const preset = new URLSearchParams(q).get("new") || "";
   // 상태별 탭 (t.tabs): 탭에 속하지 않는 값이 있으면 "기타" 탭을 추가
@@ -150,8 +152,9 @@ async function tableView(p, t, q) {
   };
   const importCard = t.import ? `<div class="card"><div class="mut" style="margin-bottom:8px">${esc(t.import.label)} — 전체 목록을 올리면 기존 데이터와 비교해 신규·변경·삭제를 반영합니다</div>
     <div class="row"><input type="file" id="imp" accept=".xlsx,.xls"><button id="impgo">비교하기</button></div><div id="impres" style="margin-top:12px"></div></div>` : "";
-  const pickCard = t.pick ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 선택하면 아래 입력칸이 자동으로 채워집니다" : `기초자료가 비어 있습니다. 먼저 <a href="#/${t.pick.plugin || p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
-    <input id="pq" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div id="pr" class="plist"></div></div>` : "";
+  const picks = t.pick ? (t.picks || [{ fill: t.pick.fill }]) : [];
+  const pickCard = picks.length ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 품목명이나 코드를 입력하면 일치하는 품목이 나타나고, 선택하면 " + (picks.some(x => x.save) ? "바로 저장됩니다" : "아래 입력칸이 자동으로 채워집니다") : `기초자료가 비어 있습니다. 먼저 <a href="#/${t.pick.plugin || p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
+    ${picks.map((x, n) => `<div style="margin-bottom:${n < picks.length - 1 ? 10 : 0}px">${x.label ? `<div style="font-weight:600;margin-bottom:4px">${esc(x.label)}</div>` : ""}<input class="pq" data-n="${n}" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div class="plist pr" data-n="${n}"></div></div>`).join("")}</div>` : "";
   const formCard = ro ? "" : `<div class="card"><div class="mut" style="margin-bottom:8px">추가 / 수정 — 첫 번째 값이 같으면 덮어씁니다</div><form id="f" class="row">
       ${t.fields.map((fl, i) => `<label style="flex:${fl.lines ? "1 1 100%" : i === 0 || /품목명/.test(fl.l) ? "2 1 420px" : "1 1 160px"}">${esc(fl.l)}${fl.lines ? `<textarea rows="5" name="f${i}" style="width:100%"></textarea>${fl.suggest ? '<div id="sgbox" class="plist"></div><div id="sgwarn" class="err" style="font-size:12.5px"></div>' : ""}` : `<input name="f${i}" style="width:100%" ${fl.number ? 'type="number" step="any" min="0" inputmode="decimal"' : ""} ${fl.ref ? `list="dl${i}" autocomplete="off"` : ""} ${i === 0 ? `value="${esc(preset)}"` : ""}>${fl.ref ? `<datalist id="dl${i}">${Object.entries(refs[fl.ref]).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("")}</datalist>` : ""}`}</label>`).join("")}<button>저장</button></form></div>`;
   $("main").innerHTML = `<div id="toast"></div><h2>${esc(t.title)} <span class="mut" id="cnt" style="font-size:13px;font-weight:400"></span></h2>${t.note ? `<p class="mut" style="margin:-4px 0 12px">${esc(t.note)}</p>` : ""}${importCard}
@@ -186,19 +189,28 @@ async function tableView(p, t, q) {
     };
     ["input", "click", "keyup"].forEach(ev => ta.addEventListener(ev, sgRefresh));
   }
-  if (t.pick) {   // 기초자료 검색 → 선택 시 입력칸 자동 채움 (사용구분 NO인 품목은 제외)
-    const usable = master.filter(r => r.v[3] !== "NO"); let hit = [];
-    $("#pq").oninput = e => {
-      const tk = e.target.value.toLowerCase().split(/\s+/).filter(Boolean);
-      hit = tk.length ? usable.filter(r => { const h = `${r.k} ${r.v[0]} ${r.v[2] || ""}`.toLowerCase(); return tk.every(x => h.includes(x)); }) : [];
-      const more = hit.length - LIMIT; hit = hit.slice(0, LIMIT);
-      $("#pr").innerHTML = hit.map((r, i) => `<div class="pick" data-i="${i}"><b>${esc(r.v[0])}</b> <span class="mut">${esc(r.k)}</span></div>`).join("") + (more > 0 ? `<div class="mut" style="padding:6px 10px">외 ${more}건 — 단어를 더 입력해 좁혀 보세요</div>` : "");
-      document.querySelectorAll(".pick").forEach(el => el.onclick = () => {
-        const r = hit[el.dataset.i];
-        for (const [i, src] of Object.entries(t.pick.fill)) $("#f")["f" + i].value = src === "k" ? r.k : r.v[0];
-        $("#pr").innerHTML = ""; $("#pq").value = "";
-      });
-    };
+  if (picks.length) {   // 기초자료 검색 → 선택 시 입력칸 자동 채움 / 설정값 저장 (사용구분 NO인 품목은 제외)
+    const usable = master.filter(r => r.v[3] !== "NO");
+    picks.forEach((pk, n) => {
+      const inp = document.querySelector(`.pq[data-n="${n}"]`), box = document.querySelector(`.pr[data-n="${n}"]`); let hit = [];
+      inp.oninput = () => {
+        const tk = inp.value.toLowerCase().split(/\s+/).filter(Boolean);
+        hit = tk.length ? usable.filter(r => { const h = `${r.k} ${r.v[0]} ${r.v[2] || ""}`.toLowerCase(); return tk.every(x => h.includes(x)); }) : [];
+        const more = hit.length - LIMIT; hit = hit.slice(0, LIMIT);
+        box.innerHTML = hit.map((r, i) => `<div class="pick" data-i="${i}"><b>${esc(r.v[0])}</b> <span class="mut">${esc(r.k)}</span></div>`).join("") + (more > 0 ? `<div class="mut" style="padding:6px 10px">외 ${more}건 — 단어를 더 입력해 좁혀 보세요</div>` : "") + (tk.length && !hit.length ? `<div class="mut" style="padding:6px 10px">일치하는 품목이 없습니다</div>` : "");
+        box.querySelectorAll(".pick").forEach(el => el.onclick = async () => {
+          const r = hit[el.dataset.i], val = src => src === "k" ? r.k : r.v[0];
+          if (pk.save) {
+            const recs = Object.entries(pk.save).map(([k, src]) => ({ ns, k, v: [val(src)] }));
+            const { error } = await sb.from("lookup").upsert(recs); if (error) return toast(error.message, true);
+            for (const rc of recs) rows = [...rows.filter(x => x.k !== rc.k), { k: rc.k, v: rc.v }].sort((a, b) => (a.k < b.k ? -1 : 1));
+            toast(`저장했습니다: ${r.v[0]} (${r.k})`); draw($("#q").value);
+          } else for (const [i, src] of Object.entries(pk.fill)) { const f = $("#f")["f" + i]; f.value = val(src); }
+          box.innerHTML = ""; inp.value = "";
+          if (!pk.save) { const f = $("#f"); f.scrollIntoView({ block: "center", behavior: "smooth" }); }
+        });
+      };
+    });
   }
   if (t.import) {
     $("#impgo").onclick = async () => {
