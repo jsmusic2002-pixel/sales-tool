@@ -97,7 +97,10 @@ function runView(p) {
 }
 async function showDash(p, focus) {   // 저장된 최근 집계를 불러와 대시보드를 그림
   const host = $("#dash"); if (!host) return;
-  try { Dashboard.mount(host, await fetchRecent(`${p.id}/sales`, 150), { weekStart: p.weekStartDay ?? 5, focus,
+  try {
+    const rates = {};   // 쇼핑몰별 수수료율(%) — 플러그인의 dashRates 설정(표 이름, 값 위치) 기준
+    if (p.dashRates) for (const r of await fetchNs(`${p.id}/${p.dashRates.ns}`)) rates[r.k] = Number(r.v[p.dashRates.index]) || 0;
+    Dashboard.mount(host, await fetchRecent(`${p.id}/sales`, 150), { weekStart: p.weekStartDay ?? 5, focus, rates,
     onDelete: async k => {   // 날짜별 집계 삭제 후 대시보드 새로고침
       const { error } = await sb.from("lookup").delete().eq("ns", `${p.id}/sales`).eq("k", k);
       if (error) throw error; toast(`${k} 집계를 삭제했습니다.`); await showDash(p);
@@ -111,12 +114,13 @@ const LIMIT = 40;   // 후보 목록에 한 번에 보여줄 최대 개수 (목�
 async function tableView(p, t, q) {
   shell(`${p.id}/t/${t.ns}`, `<h2>${esc(t.title)}</h2><div class="card">로딩 중...</div>`);
   const ns = `${p.id}/${t.ns}`, ro = !!t.readonly;
-  let rows, master = [], names = [];
+  let rows, master = [], names = []; const refs = {};
   try { rows = await fetchNs(ns);
     if (t.seed) {   // 설정 기본값이 없으면 처음 열 때 자동 입력
       const add = t.seed.filter(([k]) => !rows.some(r => r.k === k)).map(([k, ...v]) => ({ ns, k, v }));
       if (add.length) { const { error } = await sb.from("lookup").upsert(add); if (error) throw error; rows = [...rows, ...add.map(({ k, v }) => ({ k, v }))].sort((a, b) => (a.k < b.k ? -1 : 1)); }
     }
+    for (const fl of t.fields) if (fl.ref && !refs[fl.ref]) refs[fl.ref] = Object.fromEntries((await fetchNs(`${p.id}/${fl.ref}`)).map(r => [r.k, r.v[0]]));   // 코드 → 이름
     if (t.pick) master = await fetchNs(`${t.pick.plugin || p.id}/${t.pick.ns}`);
     const sgf0 = t.fields.find(fl => fl.suggest); if (sgf0) names = (await fetchNs(`${p.id}/${sgf0.suggest}`)).map(r => r.k); } catch (e) { return toast("불러오기 실패: " + e.message, true); }
   const preset = new URLSearchParams(q).get("new") || "";
@@ -130,10 +134,11 @@ async function tableView(p, t, q) {
     $("#tabs").innerHTML = tabs.map((x, i) => `<button type="button" class="btn sm ${i === tab ? "" : "ghost"}" data-i="${i}">${esc(x.label)} ${tabRows(i).length}</button>`).join(" ");
     $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => { tab = +b.dataset.i; draw($("#q").value); });
   };
+  const fmt = (fl, x) => { const t0 = x == null ? "" : String(x); if (!fl || t0 === "") return t0; if (fl.ref && refs[fl.ref] && refs[fl.ref][t0]) return `${t0} · ${refs[fl.ref][t0]}`; return fl.suffix ? t0 + fl.suffix : t0; };
   const draw = (filter = "") => {
     drawTabs();
-    const f = filter.toLowerCase(), base = t.tabs ? tabRows(tab) : rows, shown = base.filter(r => !f || (r.k + " " + r.v.join(" ")).toLowerCase().includes(f)).slice(0, 200);
-    $("#rows").innerHTML = shown.map(r => `<tr><td>${esc(r.k)}</td>${r.v.map(x => `<td>${esc(x)}</td>`).join("")}${ro ? "" : `<td style="width:120px;white-space:nowrap"><button class="btn sm ghost ed" data-k="${esc(r.k)}">수정</button> <button class="del" data-k="${esc(r.k)}">삭제</button></td>`}</tr>`).join("") || `<tr><td class="mut">결과 없음</td></tr>`;
+    const f = filter.toLowerCase(), base = t.tabs ? tabRows(tab) : rows, shown = base.filter(r => !f || (r.k + " " + r.v.map((x, i) => fmt(t.fields[i + 1], x)).join(" ")).toLowerCase().includes(f)).slice(0, 200);
+    $("#rows").innerHTML = shown.map(r => `<tr><td>${esc(r.k)}</td>${r.v.map((x, i) => `<td>${esc(fmt(t.fields[i + 1], x))}</td>`).join("")}${ro ? "" : `<td style="width:120px;white-space:nowrap"><button class="btn sm ghost ed" data-k="${esc(r.k)}">수정</button> <button class="del" data-k="${esc(r.k)}">삭제</button></td>`}</tr>`).join("") || `<tr><td class="mut">결과 없음</td></tr>`;
     $("#cnt").textContent = (t.tabs ? `${tabs[tab].label} ${base.length}행 (전체 ${rows.length}행)` : `전체 ${rows.length}행`) + (shown.length === 200 ? " · 200행까지 표시, 검색을 이용하세요" : "");
     document.querySelectorAll(".ed").forEach(b => b.onclick = () => { fillForm(b.dataset.k); });
     document.querySelectorAll(".del").forEach(b => b.onclick = async () => {
@@ -148,7 +153,7 @@ async function tableView(p, t, q) {
   const pickCard = t.pick ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 선택하면 아래 입력칸이 자동으로 채워집니다" : `기초자료가 비어 있습니다. 먼저 <a href="#/${t.pick.plugin || p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
     <input id="pq" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div id="pr" class="plist"></div></div>` : "";
   const formCard = ro ? "" : `<div class="card"><div class="mut" style="margin-bottom:8px">추가 / 수정 — 첫 번째 값이 같으면 덮어씁니다</div><form id="f" class="row">
-      ${t.fields.map((fl, i) => `<label style="flex:${fl.lines ? "1 1 100%" : i === 0 || /품목명/.test(fl.l) ? "2 1 420px" : "1 1 160px"}">${esc(fl.l)}${fl.lines ? `<textarea rows="5" name="f${i}" style="width:100%"></textarea>${fl.suggest ? '<div id="sgbox" class="plist"></div><div id="sgwarn" class="err" style="font-size:12.5px"></div>' : ""}` : `<input name="f${i}" style="width:100%" ${i === 0 ? `value="${esc(preset)}"` : ""}>`}</label>`).join("")}<button>저장</button></form></div>`;
+      ${t.fields.map((fl, i) => `<label style="flex:${fl.lines ? "1 1 100%" : i === 0 || /품목명/.test(fl.l) ? "2 1 420px" : "1 1 160px"}">${esc(fl.l)}${fl.lines ? `<textarea rows="5" name="f${i}" style="width:100%"></textarea>${fl.suggest ? '<div id="sgbox" class="plist"></div><div id="sgwarn" class="err" style="font-size:12.5px"></div>' : ""}` : `<input name="f${i}" style="width:100%" ${fl.number ? 'type="number" step="any" min="0" inputmode="decimal"' : ""} ${fl.ref ? `list="dl${i}" autocomplete="off"` : ""} ${i === 0 ? `value="${esc(preset)}"` : ""}>${fl.ref ? `<datalist id="dl${i}">${Object.entries(refs[fl.ref]).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("")}</datalist>` : ""}`}</label>`).join("")}<button>저장</button></form></div>`;
   $("main").innerHTML = `<div id="toast"></div><h2>${esc(t.title)} <span class="mut" id="cnt" style="font-size:13px;font-weight:400"></span></h2>${t.note ? `<p class="mut" style="margin:-4px 0 12px">${esc(t.note)}</p>` : ""}${importCard}
     <div class="card">${t.tabs ? `<div id="tabs" style="margin-bottom:10px"></div>` : ""}<input id="q" placeholder="검색" style="width:100%"></div>${pickCard}${formCard}
     <div class="card wrap"><table><tr>${t.fields.map(fl => `<th>${esc(fl.l)}</th>`).join("")}${ro ? "" : "<th></th>"}</tr><tbody id="rows"></tbody></table></div>`;

@@ -36,7 +36,8 @@
 .viz-top{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.viz-top .mut{font-size:13px}.viz-nav{margin-left:auto;display:flex;gap:6px}
 .viz-nav button{background:none;color:var(--tx);border:1px solid var(--line);padding:3px 10px;font-size:13px}.viz-nav button:disabled{opacity:.35;cursor:default}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}.tile{flex:1 1 150px;border:1px solid var(--line);border-radius:10px;padding:10px 14px}
-.tile .l{font-size:12.5px;color:var(--mut)}.tile .v{font-size:22px;font-weight:600;margin-top:2px}
+.viz-root .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}.viz-root .seg button{background:none;color:var(--tx);border:0;border-radius:0;padding:5px 14px;font-size:13px}.viz-root .seg button[aria-pressed=true]{background:var(--v-s1);color:#fff;font-weight:600}
+.tile .l.sm{font-size:12px;margin-top:2px}.tile .l{font-size:12.5px;color:var(--mut)}.tile .v{font-size:22px;font-weight:600;margin-top:2px}
 .viz-manage{margin-top:18px;border-top:1px solid var(--line);padding-top:10px}.viz-manage summary{cursor:pointer;font-size:13.5px;color:var(--mut)}.viz-manage button.del{background:none;border:1px solid var(--line);color:#c0392b;padding:2px 10px;font-size:12.5px}.viz-manage td.n,.viz-manage th.n{text-align:right}
 .viz-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:20px}.viz-grid.two{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
 @media(max-width:820px){.viz-grid{grid-template-columns:minmax(0,1fr)}}
@@ -97,16 +98,18 @@
   }
 
   // ---------- 쇼핑몰별 순위 (가로 막대, 누르면 그 쇼핑몰만 보기) ----------
-  function shopRank(host, shops, sel, onPick) {
+  function shopRank(host, shops, sel, onPick, metric = "amt", noProfit = false) {
     host.replaceChildren();
-    const list = [...shops].filter(([, v]) => v.amt > 0).sort((a, b) => b[1].amt - a[1].amt);
+    const val = v => (metric === "profit" ? v.profit : v.amt);
+    const list = [...shops].filter(([, v]) => v.amt > 0).sort((a, b) => val(b[1]) - val(a[1]));
     if (!list.length) return host.append(h("p", { class: "mut" }, "선택한 기간에 매출이 없습니다."));
-    const max = list[0][1].amt;
+    if (metric === "profit" && noProfit) return host.append(h("p", { class: "mut" }, "이 기간에는 원가가 저장된 날짜가 없습니다. 해당 날짜의 정산 파일을 다시 변환하면 순수익이 계산됩니다."));
+    const max = Math.max(1, val(list[0][1]));
     for (const [name, v] of list)
-      host.append(h("button", { type: "button", class: "rk", "aria-pressed": sel === name, title: `${name} · ${won(v.amt)} · ${NF.format(v.qty)}개`, onclick: () => onPick(sel === name ? "" : name) },
+      host.append(h("button", { type: "button", class: "rk", "aria-pressed": sel === name, title: `${name} · ${won(val(v))} · ${NF.format(v.qty)}개`, onclick: () => onPick(sel === name ? "" : name) },
         h("span", { class: "rk-n" }, name),
-        h("span", { class: "rk-v" }, won(v.amt)),
-        h("span", { class: "rk-t" }, h("span", { class: "rk-b" + (!sel || sel === name ? "" : " dim"), style: `width:${Math.max(1.5, v.amt / max * 100)}%` }))));
+        h("span", { class: "rk-v" }, won(val(v))),
+        h("span", { class: "rk-t" }, h("span", { class: "rk-b" + (!sel || sel === name ? "" : " dim"), style: `width:${Math.max(1.5, Math.max(0, val(v)) / max * 100)}%` }))));
   }
 
   // ---------- 상품 TOP3 (판매량 / 금액) ----------
@@ -130,29 +133,42 @@
     injectCss();
     const weekStart = opts.weekStart ?? 5;                        // 0=일 … 5=금 … 6=토
     const days = new Map();
-    for (const r of rows || []) { const s = r.v && r.v[0]; if (s && Array.isArray(s.sales)) days.set(r.k, { sales: s.sales, ship: s.ship || [] }); }
+    for (const r of rows || []) { const s = r.v && r.v[0]; if (s && Array.isArray(s.sales)) days.set(r.k, { sales: s.sales, ship: s.ship || [], hasCost: s.sales.some(x => x.length > 5) }); }
+    const rates = opts.rates || {}, rate = s => Number(rates[s]) || 0;
     host.replaceChildren();
     if (!days.size) return host.append(h("div", { class: "card" }, "저장된 집계가 없습니다."));
 
     const startOf = ms => ms - ((new Date(ms).getUTCDay() - weekStart + 7) % 7) * DAY;
     const keys = [...days.keys()].sort(), latest = toMs(keys[keys.length - 1]), latestW = startOf(latest);
     const fMs = opts.focus && days.has(opts.focus) ? toMs(opts.focus) : latest, fW = startOf(fMs);
-    const st = { shop: "", selDay: toKey(fMs), selWeek: toKey(fW),
+    const st = { metric: "amt", shop: "", selDay: toKey(fMs), selWeek: toKey(fW),
       dayEnd: fMs > latest - 14 * DAY ? latest : fMs, weekEnd: fW > latestW - 56 * DAY ? latestW : fW };
     const NDAY = 14, NWEEK = 8;
 
     function summarize(ks, shop) {
-      const r = { amt: 0, qty: 0, ship: 0, shipN: 0, n: 0, products: new Map(), shops: new Map() };
+      const r = { amt: 0, qty: 0, ship: 0, shipN: 0, n: 0, pn: 0, g: 0, profit: 0, fee: 0, unk: 0, norate: 0, products: new Map(), shops: new Map() };
+      const sh = s => { let v = r.shops.get(s); if (!v) r.shops.set(s, v = { amt: 0, qty: 0, ship: 0, g: 0, cost: 0, sc: 0, unk: 0, profit: 0 }); return v; };
       for (const k of ks) {
-        const d = days.get(k); if (!d) continue; r.n++;
-        for (const [s, code, name, q, a] of d.sales) {
+        const d = days.get(k); if (!d) continue; r.n++; if (d.hasCost) r.pn++;
+        for (const [s, code, name, q, a, c, unk] of d.sales) {
           if (NOT_SALE.has(code) || /^택배비/.test(name)) continue;
-          const sh = r.shops.get(s) || { amt: 0, qty: 0 }; sh.amt += a; sh.qty += q; r.shops.set(s, sh);
+          const v = sh(s); v.amt += a; v.qty += q;
+          if (d.hasCost) { v.g += a; v.cost += c || 0; if (unk) v.unk += a; }
           if (shop && s !== shop) continue;
           r.amt += a; r.qty += q;
           const p = r.products.get(code) || { name, qty: 0, amt: 0 }; p.qty += q; p.amt += a; p.name = name; r.products.set(code, p);
         }
-        for (const [s, n, a] of d.ship) if (!shop || s === shop) { r.ship += a; r.shipN += n; }
+        for (const [s, n, a, c] of d.ship) {
+          const v = sh(s); v.ship += a;
+          if (d.hasCost) { v.g += a; v.sc += c || 0; }
+          if (!shop || s === shop) { r.ship += a; r.shipN += n; }
+        }
+      }
+      // 순수익 = (판매금액 + 택배비) × (1 − 수수료율) − 원가(상품 입고단가 + 택배비 품목 입고단가)  ※ 원가가 저장된 날짜만 집계
+      for (const [s, v] of r.shops) {
+        const fee = v.g * rate(s) / 100; v.profit = Math.round(v.g - fee - v.cost - v.sc);
+        if (shop && s !== shop) continue;
+        r.profit += v.profit; r.g += v.g; r.fee += Math.round(fee); r.unk += v.unk; if (v.amt > 0 && !rate(s)) r.norate++;
       }
       return r;
     }
@@ -179,11 +195,16 @@
     const body = h("div");
     const card = h("div", { class: "card viz-root" },
       h("div", { class: "viz-head" }, h("h3", null, "매출 현황"), h("label", null, "쇼핑몰", select),
-        h("span", { class: "mut", style: "font-size:12.5px" }, "부가세 포함 판매가 · 매출·TOP3는 택배비 제외, 택배비는 별도 표시")),
+        h("span", { class: "mut", style: "font-size:12.5px" }, "부가세 포함 판매가 · 매출·TOP3는 택배비 제외, 택배비는 별도 표시 · 순수익 = (판매금액+택배비)×(1−수수료율)−원가")),
       body, tipEl);
 
     const weekKeys = ws => Array.from({ length: 7 }, (_, i) => toKey(ws + i * DAY));
-    const tile = (l, v) => h("div", { class: "tile" }, h("div", { class: "l" }, l), h("div", { class: "v" }, v));
+    const tile = (l, v, sub) => h("div", { class: "tile" }, h("div", { class: "l" }, l), h("div", { class: "v" }, v), sub ? h("div", { class: "l sm" }, sub) : null);
+    const MN = () => (st.metric === "profit" ? "순수익" : "매출");
+    const pv = s => (s.pn ? won(s.profit) : "원가 미저장");                      // 순수익 표시값
+    const profitSub = s => !s.pn ? "이 기간은 원가가 저장되지 않았습니다(정산 파일을 다시 변환하면 계산됨)"
+      : `마진 ${s.g > 0 ? Math.round(s.profit / s.g * 1000) / 10 : 0}%` + (s.pn < s.n ? ` · 원가 저장된 ${s.pn}/${s.n}일만 집계` : "") + (s.unk > 0 ? ` · 입고단가 없는 품목 매출 ${won(s.unk)} 포함` : "");
+    const feeSub = s => (s.norate ? `수수료율 미입력 ${s.norate}곳은 0%로 계산 ([DB]거래처에서 입력)` : "");
 
     // 일별/주간 막대 그래프용 데이터 (shop이 ""이면 모든 쇼핑몰 합계)
     function series(kind, shop) {
@@ -193,10 +214,12 @@
       for (let i = N - 1; i >= 0; i--) {
         if (endMs - i * span < first) continue;                                       // 데이터가 시작되기 전 기간은 건너뜀
         const ms = endMs - i * span, ks = isDay ? [toKey(ms)] : weekKeys(ms), s = summarize(ks, shop), partial = !isDay && s.n < 7;
-        items.push({ key: toKey(ms), ms, s, value: s.n ? s.amt : null,
+        const value = st.metric === "profit" ? (s.pn ? s.profit : null) : (s.n ? s.amt : null);
+        items.push({ key: toKey(ms), ms, s, value,
           label: md(ms), sub: isDay ? DOW[new Date(ms).getUTCDay()] : (partial ? `${s.n}/7일` : "~" + md(ms + 6 * DAY)),
           title: isDay ? mdw(ms) : `${mdw(ms)} ~ ${mdw(ms + 6 * DAY)}`,
-          rows: s.n ? [["판매 수량", NF.format(s.qty) + "개"], ["택배비(별도)", won(s.ship)]].concat(partial ? [["집계된 일수", `${s.n}/7일 (일부만 저장됨)`]] : []) : [] });
+          rows: s.n ? [["매출", won(s.amt)], ["판매 수량", NF.format(s.qty) + "개"], ["택배비(별도)", won(s.ship)], ["수수료", s.pn ? won(s.fee) : "–"], ["순수익", pv(s)]]
+            .filter(r => r[0] !== MN()).concat(partial ? [["집계된 일수", `${s.n}/7일 (일부만 저장됨)`]] : []) : [] });
       }
       const selMs = toMs(selKey), cur = summarize(isDay ? [selKey] : weekKeys(selMs), shop);
       return { isDay, N, endMs, span, selKey, selMs, items, first, cur };
@@ -208,41 +231,47 @@
       const nextDisabled = isDay ? endMs >= latest : endMs >= latestW, prevDisabled = endMs - (N - 1) * span <= first;
       const shift = dir => { if (isDay) st.dayEnd = Math.min(latest, st.dayEnd + dir * 7 * DAY); else st.weekEnd = Math.min(latestW, st.weekEnd + dir * 28 * DAY); render(); };
       const chart = h("div", { class: "viz-chart" }), rank = h("div"), t3 = h("div", { class: "viz-grid two", style: "margin-top:14px" });
-      const sec = h("section", { class: "viz-sec", "aria-label": isDay ? "일별 매출 현황" : "주간 매출 현황" },
-        h("div", { class: "viz-top" }, h("h4", null, isDay ? "일별 매출 현황" : "주간 매출 현황"),
+      const sec = h("section", { class: "viz-sec", "aria-label": (isDay ? "일별 " : "주간 ") + MN() + " 현황" },
+        h("div", { class: "viz-top" }, h("h4", null, (isDay ? "일별 " : "주간 ") + MN() + " 현황"),
           h("span", { class: "mut" }, isDay ? `최근 ${N}일` : `최근 ${N}주 · ${DOW[weekStart]}요일 ~ ${DOW[(weekStart + 6) % 7]}요일 기준`),
           h("div", { class: "viz-nav" }, isDay ? h("button", { type: "button", disabled: !cur.n, title: "선택한 날짜의 모든 쇼핑몰 성과를 한 장의 이미지(PNG)로 저장합니다", onclick: () => downloadDayImage(selKey) }, "전체 쇼핑몰 이미지 저장") : null, h("button", { type: "button", disabled: prevDisabled, onclick: () => shift(-1) }, "◀ 이전"), h("button", { type: "button", disabled: nextDisabled, onclick: () => shift(1) }, "다음 ▶"))),
         h("div", { class: "tiles" },
           tile(isDay ? `${mdw(selMs)} 매출` : `${md(selMs)} ~ ${md(selMs + 6 * DAY)} 매출${cur.n < 7 ? ` · ${cur.n}/7일 집계` : ""}`, cur.n ? won(cur.amt) : "데이터 없음"),
           tile("판매 수량", cur.n ? NF.format(cur.qty) + "개" : "–"),
-          tile("택배비 (별도)", cur.n ? `${won(cur.ship)} · ${NF.format(cur.shipN)}건` : "–")),
+          tile("택배비 (별도)", cur.n ? `${won(cur.ship)} · ${NF.format(cur.shipN)}건` : "–"),
+          tile("수수료", cur.n && cur.pn ? won(cur.fee) : "–", cur.n ? feeSub(cur) : ""),
+          tile("순수익", cur.n ? pv(cur) : "–", cur.n ? profitSub(cur) : "")),
         h("div", { class: "viz-grid" },
           h("div", null, h("p", { class: "viz-sub" }, `${st.shop || "전체 쇼핑몰"} · 막대를 누르면 ${isDay ? "그 날짜" : "그 주"}로 바뀝니다`), chart),
-          h("div", null, h("p", { class: "viz-sub" }, `쇼핑몰별 매출 · ${isDay ? mdw(selMs) : md(selMs) + " 주"} (누르면 해당 쇼핑몰만 보기)`), rank)),
+          h("div", null, h("p", { class: "viz-sub" }, `쇼핑몰별 ${MN()} · ${isDay ? mdw(selMs) : md(selMs) + " 주"} (누르면 해당 쇼핑몰만 보기)`), rank)),
         t3,
         h("details", null, h("summary", null, "표로 보기"), h("div", { class: "wrap" }, h("table", null,
-          h("tr", null, h("th", null, isDay ? "날짜" : "기간"), h("th", { class: "n" }, "매출"), h("th", { class: "n" }, "판매 수량"), h("th", { class: "n" }, "택배비(별도)"), h("th", { class: "n" }, "집계 일수")),
+          h("tr", null, h("th", null, isDay ? "날짜" : "기간"), h("th", { class: "n" }, "매출"), h("th", { class: "n" }, "판매 수량"), h("th", { class: "n" }, "택배비(별도)"), h("th", { class: "n" }, "수수료"), h("th", { class: "n" }, "순수익"), h("th", { class: "n" }, "집계 일수")),
           items.map(it => h("tr", null, h("td", null, it.title), h("td", { class: "n" }, it.value == null ? "–" : won(it.value)), h("td", { class: "n" }, it.s.n ? NF.format(it.s.qty) : "–"),
-            h("td", { class: "n" }, it.s.n ? won(it.s.ship) : "–"), h("td", { class: "n" }, isDay ? (it.s.n ? "1/1" : "0/1") : `${it.s.n}/7`)))))));
+            h("td", { class: "n" }, it.s.n ? won(it.s.ship) : "–"), h("td", { class: "n" }, it.s.pn ? won(it.s.fee) : "–"), h("td", { class: "n" }, it.s.pn ? won(it.s.profit) : "–"), h("td", { class: "n" }, isDay ? (it.s.n ? "1/1" : "0/1") : `${it.s.n}/7`)))))));
       return { sec, draw() {
         columnChart(chart, items, selKey, k => pickSel(isDay, k), tip);
-        shopRank(rank, cur.shops, st.shop, s => { st.shop = s; select.value = s; render(); });
+        shopRank(rank, cur.shops, st.shop, s => { st.shop = s; select.value = s; render(); }, st.metric, !cur.pn);
         top3(t3, cur.products);
       } };
     }
 
     // 전체 쇼핑몰 합계 (쇼핑몰 선택과 상관없이 항상 모든 쇼핑몰) — 일별·주간 요약
+    const metricSeg = h("div", { class: "seg", role: "group", "aria-label": "표시 기준" });
+    const drawSeg = () => metricSeg.replaceChildren(...[["amt", "매출"], ["profit", "순수익"]].map(([k, l]) => h("button", { type: "button", "aria-pressed": st.metric === k, onclick: () => { st.metric = k; render(); } }, l)));
     const totalGrid = h("div", { class: "viz-grid two" });
     const totalCard = h("div", { class: "card viz-root" },
-      h("div", { class: "viz-head" }, h("h3", null, "전체 쇼핑몰 총 매출"), h("span", { class: "mut", style: "font-size:12.5px" }, "모든 쇼핑몰 합계 · 택배비 제외 · 막대를 누르면 아래 상세 현황도 같은 날짜(주)로 바뀝니다")), totalGrid);
+      h("div", { class: "viz-head" }, h("h3", null, "전체 쇼핑몰 총 " + "현황"), metricSeg, h("span", { class: "mut", style: "font-size:12.5px;flex-basis:100%" }, "모든 쇼핑몰 합계 · 매출은 택배비 제외 · 막대를 누르면 아래 상세 현황도 같은 날짜(주)로 바뀝니다")), totalGrid);
     host.replaceChildren(totalCard, card);
     function totalBlock() {
       const parts = ["day", "week"].map(kind => {
         const sr = series(kind, ""), partial = !sr.isDay && sr.cur.n < 7, chart = h("div", { class: "viz-chart" });
-        const label = sr.isDay ? `${mdw(sr.selMs)} 총 매출` : `${md(sr.selMs)} ~ ${md(sr.selMs + 6 * DAY)} 총 매출${partial ? ` · ${sr.cur.n}/7일 집계` : ""}`;
+        const label = sr.isDay ? `${mdw(sr.selMs)} 총 ${MN()}` : `${md(sr.selMs)} ~ ${md(sr.selMs + 6 * DAY)} 총 ${MN()}${partial ? ` · ${sr.cur.n}/7일 집계` : ""}`;
+        const c = sr.cur, big = st.metric === "profit" ? (c.n ? pv(c) : "데이터 없음") : (c.n ? won(c.amt) : "데이터 없음");
+        const other = !c.n ? "" : st.metric === "profit" ? `매출 ${won(c.amt)} · ${profitSub(c).split(" · ")[0]}` : `판매 ${NF.format(c.qty)}개 · 택배비(별도) ${won(c.ship)}${c.pn ? " · 순수익 " + won(c.profit) : ""}`;
         const col = h("div", null, h("h4", { style: "margin:0 0 8px;font-size:15px" }, sr.isDay ? "일별" : "주간"),
-          h("div", { class: "tile", style: "margin-bottom:8px" }, h("div", { class: "l" }, label), h("div", { class: "v" }, sr.cur.n ? won(sr.cur.amt) : "데이터 없음"),
-            h("div", { class: "l", style: "margin-top:2px" }, sr.cur.n ? `판매 ${NF.format(sr.cur.qty)}개 · 택배비(별도) ${won(sr.cur.ship)}` : "")), chart);
+          h("div", { class: "tile", style: "margin-bottom:8px" }, h("div", { class: "l" }, label), h("div", { class: "v" }, big),
+            h("div", { class: "l", style: "margin-top:2px" }, other)), chart);
         return { col, draw: () => columnChart(chart, sr.items, sr.selKey, k => pickSel(sr.isDay, k), tip, 190) };
       });
       totalGrid.replaceChildren(...parts.map(x => x.col)); parts.forEach(x => x.draw());
@@ -320,9 +349,9 @@
     card.append(manage);
 
     function render() {
-      tip.hide();
+      tip.hide(); card.querySelector("h3").textContent = MN() + " 현황";
       const a = section("day"), b = section("week");
-      body.replaceChildren(a.sec, b.sec); totalBlock(); a.draw(); b.draw();
+      body.replaceChildren(a.sec, b.sec); drawSeg(); totalBlock(); a.draw(); b.draw();
     }
     render();
     let timer = null;
