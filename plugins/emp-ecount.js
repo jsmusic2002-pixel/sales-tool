@@ -33,6 +33,7 @@
       { label: "품목매칭등록", ns: "products" },
       { label: "특별매칭등록", ns: "sets", when: /[+＋]|세트|set\b|\bset/i },
     ],
+    dashboard: true,   // 왼쪽 메뉴에 별도 [대시보드] 메뉴 표시 (정산 파일 없이도 열람)
     weekStartDay: 5,   // 주간 매출 기준: 금요일(5) ~ 목요일
     dashRates: { ns: "customers", index: 2 },   // 대시보드 수수료율: [DB]거래처 v[2] (판매자ID별칭 → %)
     runLabel: "정산파일 업로드",
