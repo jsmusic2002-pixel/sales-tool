@@ -44,10 +44,102 @@ function shell(active, body) {
 }
 
 // ---------- 변환 화면 ----------
-// 매칭 실패 품목 옆의 등록 버튼들. 이름에 '+'나 '세트'가 있으면 해당 버튼을 진하게(권장) 표시
-function errBtns(p, e) {
-  const links = p.errorLinks || [], pri = links.find(l => l.when && l.when.test(e)) || links[0];
-  return links.map(l => `<a class="btn sm ${l === pri ? "" : "ghost"}" href="#/${p.id}/t/${l.ns}?new=${encodeURIComponent(p.errorKey ? p.errorKey(e) : e)}">${esc(l.label)}</a>`).join(" ");
+// ---- 매칭 실패 품목: 변환 화면 안에서 바로 등록 (메뉴 이동 없음) ----
+// errorLinks 항목: { label, ns, when(정규식|함수: 이 버튼을 권장), solo(함수: true 면 이 버튼만 표시), inline: {kind:"pick"|"set", master:{plugin,ns}, items:"표이름"} }
+const tokOf = t => String(t).toLowerCase().replace(/선택\s*\d+\s*[:：]\s*\d*\s*\./g, " ").replace(/\/\s*\d+\s*개\s*$/, "").replace(/[★☆\[\]()]/g, " ").split(/[\s\/,+]+/).filter(Boolean);
+const rankBy = (tk, items, hay, n = 8) => {   // 단어가 많이 겹치는 순으로 후보 정렬 (모두 겹치면 '일치')
+  const out = [];
+  for (const it of items) { const h = hay(it).toLowerCase(); let c = 0; for (const x of tk) if (h.includes(x)) c++; if (c) out.push([c, it]); }
+  out.sort((a, b) => b[0] - a[0] || hay(a[1]).length - hay(b[1]).length);
+  return out.slice(0, n).map(([c, it]) => ({ it, full: c === tk.length }));
+};
+const lkTest = (w, e) => !w ? false : typeof w === "function" ? !!w(e) : w.test(e);
+const nsCache = {};
+const getNs = async key => nsCache[key] || (nsCache[key] = await fetchNs(key));
+function parseSegs(e) {   // 쉼표로 구분된 '이름/N개' → 세트 구성 후보
+  const parts = e.split(/,\s*/).map(x => x.trim()).filter(Boolean);
+  if (parts.length > 1) return parts.map(x => ({ src: x, qty: +((x.match(/\/\s*(\d+)\s*개\s*$/) || [])[1] || 1), q: tokOf(x).join(" "), name: null }));
+  const m = e.match(/(\d+(?:\s*\+\s*\d+)+)/);   // ★1+1★ 같은 표기
+  return [{ src: e, qty: m ? m[1].split("+").reduce((a, b) => a + (+b || 0), 0) : 2, q: tokOf(e.replace(/\d+(?:\s*\+\s*\d+)+/, " ")).join(" "), name: null }];
+}
+async function renderErrs(p) {
+  const box = $("#errbox"); if (!box) return;
+  if (!last || last.pid !== p.id || !last.errors.length) { box.innerHTML = ""; return; }
+  const E = last.errors, done = last.done, n = E.filter(e => done[e]).length, all = n === E.length, links = p.errorLinks || [];
+  box.innerHTML = `<h4 class="${all ? "ok" : "err"}" style="display:flex;gap:12px;flex-wrap:wrap;align-items:baseline">${all ? `매칭 실패 ${E.length}건 모두 등록 완료` : `매칭 실패 ${E.length}건 (결과 파일에서 빠져 있음)`}
+      <span class="mut" style="font-weight:400;font-size:13.5px">처리 ${n} / ${E.length}</span>
+      <label style="font-weight:400;font-size:13.5px;color:var(--mut);margin-left:auto"><input type="checkbox" id="eopen" ${last.onlyOpen ? "checked" : ""}> 미처리만 보기</label></h4>
+    ${all ? `<p><button id="rerun">다시 변환하기</button> <span class="mut">같은 파일로 바로 다시 변환합니다</span></p>` : `<p class="mut" style="margin-top:0">버튼을 누르면 이 자리에서 바로 등록할 수 있습니다. 모두 등록한 뒤 '다시 변환하기'를 누르세요.</p>`}
+    <table>` + E.map((e, i) => {
+      if (last.onlyOpen && done[e]) return "";
+      const solo = links.find(l => lkTest(l.solo, e)), show = solo ? [solo] : links, pri = solo || links.find(l => lkTest(l.when, e)) || links[0];
+      return `<tr style="${done[e] ? "background:var(--pri2)" : ""}"><td style="white-space:normal;word-break:break-all">${done[e] ? `<span class="ok" style="font-weight:700">✓ 처리 완료</span> ` : ""}${esc(e)}${done[e] ? `<div class="mut" style="margin-top:2px">→ ${esc(done[e].label)}</div>` : ""}</td>
+        <td style="white-space:nowrap;width:1%">${done[e] ? `<button class="btn sm ghost" data-undo="${i}">되돌리기</button>` : show.map(l => `<button class="btn sm ${l === pri ? "" : "ghost"}" data-reg="${i}" data-l="${links.indexOf(l)}">${esc(l.label)}</button>`).join(" ")}</td></tr>
+        <tr id="ep${i}" hidden><td colspan="2" style="white-space:normal"></td></tr>`;
+    }).join("") + `</table>`;
+  $("#eopen").onchange = ev => { last.onlyOpen = ev.target.checked; renderErrs(p); };
+  if ($("#rerun")) $("#rerun").onclick = () => $("#go").click();
+  box.querySelectorAll("[data-undo]").forEach(b => b.onclick = async () => {
+    const e = E[+b.dataset.undo], d = done[e]; if (!d) return;
+    const { error } = await sb.from("lookup").delete().eq("ns", d.ns).eq("k", e); if (error) return toast(error.message, true);
+    delete nsCache[d.ns]; delete done[e]; toast("등록을 되돌렸습니다."); renderErrs(p);
+  });
+  box.querySelectorAll("[data-reg]").forEach(b => b.onclick = async () => {
+    const i = +b.dataset.reg, l = links[+b.dataset.l], row = $("#ep" + i), cell = row.firstElementChild;
+    if (!row.hidden && row.dataset.l === b.dataset.l) { row.hidden = true; return; }
+    row.hidden = false; row.dataset.l = b.dataset.l; cell.innerHTML = `<span class="mut">불러오는 중...</span>`;
+    const e = E[i], full = `${p.id}/${l.ns}`;
+    const finish = async (v, label) => {
+      const { error } = await sb.from("lookup").upsert({ ns: full, k: e, v }); if (error) return toast(error.message, true);
+      delete nsCache[full]; done[e] = { ns: full, label }; toast("등록했습니다."); renderErrs(p);
+    };
+    const open = `<a class="btn sm ghost" href="#/${p.id}/t/${l.ns}?new=${encodeURIComponent(p.errorKey ? p.errorKey(e) : e)}">DB 표에서 직접 열기 →</a>`;
+    try {
+      if (l.inline && l.inline.kind === "pick") {
+        const m = (await getNs(`${l.inline.master.plugin || p.id}/${l.inline.master.ns}`)).filter(r => r.v[3] !== "NO");
+        cell.innerHTML = `<div class="mut" style="margin-bottom:6px">이카운트 품목(기초자료)에서 고르세요 — 이름이 비슷한 품목을 자동으로 찾았습니다. 입력창을 고쳐 다시 찾을 수도 있습니다.</div>
+          <input class="eq" style="width:100%" value="${esc(tokOf(e).join(" "))}"><div class="plist el"></div><div style="margin-top:8px">${open}</div>`;
+        const inp = cell.querySelector(".eq"), lst = cell.querySelector(".el");
+        const draw = () => {
+          const hit = rankBy(tokOf(inp.value), m, r => `${r.k} ${r.v[0]} ${r.v[2] || ""}`, 10);
+          lst.innerHTML = hit.map((h, j) => `<div class="pick" data-j="${j}"><b>${esc(h.it.v[0])}</b> <span class="mut">${esc(h.it.k)}</span>${h.full ? ` <span class="ok" style="font-size:12px">일치</span>` : ""}</div>`).join("") || `<div class="mut" style="padding:6px 10px">일치하는 품목이 없습니다</div>`;
+          lst.querySelectorAll(".pick").forEach(el => el.onclick = () => { const r = hit[+el.dataset.j].it; finish([r.k, r.v[0]], `${r.v[0]} (${r.k})`); });
+        };
+        inp.oninput = draw; draw();
+      } else if (l.inline && l.inline.kind === "set") {
+        const names = (await getNs(`${p.id}/${l.inline.items}`)).map(r => r.k), segs = parseSegs(e); let split = 0, splitTouched = false;
+        cell.innerHTML = `<div class="mut" style="margin-bottom:6px">세트 상품입니다 — 구성 품목을 하나씩 골라 주세요. 수량만큼 같은 품목이 반복됩니다.</div><div class="sg"></div>
+          <div class="row" style="align-items:end;margin-top:8px"><button type="button" class="btn sm ghost sadd">+ 품목 추가</button>
+          <label style="flex:0 0 130px">분리수<input type="number" min="1" class="ssp" style="width:100%"></label><button type="button" class="ssv">특별매칭 저장</button><span class="mut ssn"></span></div><div style="margin-top:8px">${open}</div>`;
+        const sg = cell.querySelector(".sg"), ssp = cell.querySelector(".ssp"), ssv = cell.querySelector(".ssv"), ssn = cell.querySelector(".ssn");
+        const sync = () => {
+          const items = segs.flatMap(g => g.name ? Array(Math.max(1, g.qty)).fill(g.name) : []), tot = segs.reduce((a, g) => a + Math.max(1, g.qty), 0);
+          if (!splitTouched) ssp.value = tot; split = +ssp.value || tot;
+          const ok = segs.every(g => g.name); ssv.disabled = !ok; ssn.textContent = ok ? `${items.length}개 품목 · 합계 금액을 ${split}로 나눠 각 행에 넣습니다` : `품목을 모두 선택하세요 (${segs.filter(g => g.name).length}/${segs.length})`;
+          return items;
+        };
+        const drawSegs = () => {
+          sg.innerHTML = segs.map((g, k) => `<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px"><div class="row" style="align-items:center;gap:8px">
+            <div style="flex:1 1 260px;font-size:13px" class="mut">${g.src ? esc(g.src) : `품목 ${k + 1}`}</div><label style="flex:0 0 90px;font-size:13px">수량<input type="number" min="1" data-k="${k}" class="sq" value="${g.qty}" style="width:100%"></label>
+            ${segs.length > 1 ? `<button type="button" class="btn sm ghost sdel" data-k="${k}">삭제</button>` : ""}</div>
+            ${g.name ? `<div style="margin-top:6px"><span class="ok">✓</span> <b>${esc(g.name)}</b> <button type="button" class="btn sm ghost sre" data-k="${k}">다시 선택</button></div>` : `<input class="sqy" data-k="${k}" style="width:100%;margin-top:6px" value="${esc(g.q)}"><div class="plist" id="sl${k}"></div>`}</div>`).join("");
+          sg.querySelectorAll(".sq").forEach(x => x.oninput = () => { segs[+x.dataset.k].qty = +x.value || 1; sync(); });
+          sg.querySelectorAll(".sdel").forEach(x => x.onclick = () => { segs.splice(+x.dataset.k, 1); drawSegs(); });
+          sg.querySelectorAll(".sre").forEach(x => x.onclick = () => { segs[+x.dataset.k].name = null; drawSegs(); });
+          sg.querySelectorAll(".sqy").forEach(x => { const k = +x.dataset.k, lst = $("#sl" + k), dr = () => {
+              segs[k].q = x.value; const hit = rankBy(tokOf(x.value), names, n => n, 6);
+              lst.innerHTML = hit.map((h, j) => `<div class="pick" data-j="${j}">${esc(h.it)}${h.full ? ` <span class="ok" style="font-size:12px">일치</span>` : ""}</div>`).join("") || `<div class="mut" style="padding:6px 10px">일치하는 품목이 없습니다 — 검색어를 바꿔 보세요</div>`;
+              lst.querySelectorAll(".pick").forEach(el => el.onclick = () => { segs[k].name = hit[+el.dataset.j].it; drawSegs(); });
+            }; x.oninput = dr; dr(); });
+          sync();
+        };
+        ssp.oninput = () => { splitTouched = true; sync(); };
+        cell.querySelector(".sadd").onclick = () => { segs.push({ src: "", qty: 1, q: "", name: null }); drawSegs(); };
+        ssv.onclick = () => { const items = sync(); finish([String(split), items.join("\n")], `특별매칭 ${items.length}개 품목 (분리수 ${split})`); };
+        drawSegs();
+      } else cell.innerHTML = `<div class="mut" style="margin-bottom:8px">이 항목은 DB 표에서 등록합니다.</div>${open}`;
+    } catch (err) { cell.innerHTML = `<span class="err">불러오기 실패: ${esc(err.message || err)}</span>`; }
+  });
 }
 function runView(p) {
   const today = new Date().toISOString().slice(0, 10);
@@ -56,7 +148,7 @@ function runView(p) {
     ${(p.inputs || [{ id: "file", label: p.input }]).map(i => `<label style="flex:1 1 100%">${esc(i.label)}<input type="file" id="in_${i.id}" accept=".xls,.xlsx" ${i.multiple ? "multiple" : ""}></label>`).join("")}
     <label>정산 날짜<input type="date" id="date" value="${today}"></label><button id="go">변환하기</button></div>
     <p class="mut" style="margin:12px 0 0">파일은 이 컴퓨터의 브라우저에서만 처리되며 서버로 전송되지 않습니다.</p></div><div id="res">${prev ? prev.html : ""}</div>${p.dashboard ? "" : `<div id="dash"></div>`}`);
-  if (prev) { bindDownload(prev); if (prev.dashDate) showDash(p, prev.dashDate); }
+  if (prev) { bindDownload(prev); renderErrs(p); if (prev.dashDate) showDash(p, prev.dashDate); }
   $("#go").onclick = async () => {
     const specs = p.inputs || [{ id: "file", required: true }], date = $("#date").value.replace(/-/g, "");
     if (!date || specs.some(i => i.required && !$("#in_" + i.id).files.length)) return toast("필수 파일과 날짜를 선택하세요.", true);
@@ -87,9 +179,8 @@ function runView(p) {
         ${(r.info || []).concat(dashMsg ? [dashMsg] : []).map(n => `<div class="mut" style="margin-top:10px">${esc(n)}</div>`).join("")}${dashDate && p.dashboard ? `<p style="margin:10px 0 0"><a class="btn sm ghost" href="#/${p.id}/dash?focus=${dashDate}">대시보드에서 보기 →</a></p>` : ""}
         ${r.notes.length ? `<h4 class="err">확인 필요</h4>` + r.notes.map(n => `<div>${esc(n)}</div>`).join("") : ""}
         ${(r.warns || []).length ? `<h4 class="err">경고 ${r.warns.length}건</h4><table>` + r.warns.map(w => `<tr><td style="white-space:normal;word-break:break-all">${esc(w.text)}</td><td style="white-space:nowrap;width:1%"><a class="btn sm" href="#/${p.id}/t/${w.ns}?new=${encodeURIComponent(w.key)}">${esc(w.label || "수정")}</a></td></tr>`).join("") + `</table>` : ""}
-        ${r.errors.length ? `<h4 class="err">매칭 실패 ${r.errors.length}건 (결과 파일에서 빠져 있음)</h4><table>` + r.errors.map(e =>
-          `<tr><td style="white-space:normal;word-break:break-all">${esc(e)}</td><td style="white-space:nowrap;width:1%">${errBtns(p, e)}</td></tr>`).join("") + `</table><p class="mut">등록 후 같은 파일을 다시 변환하세요.</p>` : ""}</div>`;
-      last = { pid: p.id, html, out, name, dashDate }; $("#res").innerHTML = html; bindDownload(last); toast("");
+        <div id="errbox"></div></div>`;
+      last = { pid: p.id, html, out, name, dashDate, errors: r.errors, done: {}, onlyOpen: false }; $("#res").innerHTML = html; bindDownload(last); renderErrs(p); toast("");
       if (dashDate) await showDash(p, dashDate); else if ($("#dash")) $("#dash").replaceChildren();
     } catch (e) { toast("변환 실패: " + (e.message || e), true); }
     $("#go").disabled = false;
