@@ -42,7 +42,7 @@
       { id: "spleee", label: "스마트스토어-스플리스토어 네이버 파일 (배송현황관리·구매확정내역, 여러 개 선택 가능)", multiple: true },
     ],
     outputName: d => `${d}_네이버N배송_이카운트웹자료올리기.xlsx`,
-    errorLinks: [{ label: "품목매칭등록", ns: "options" }, { label: "1+1분리등록", ns: "sets", when: /1\s*\+\s*1/ }],
+    errorLinks: [{ label: "품목매칭등록", ns: "options", inline: { kind: "pick", master: { plugin: "emp-ecount", ns: "master" } } }, { label: "1+1분리등록", ns: "sets", when: /1\s*\+\s*1/ }],
     runLabel: "네이버 파일 업로드",
     dbLabel: "DB관리",
     tables: [

@@ -23,15 +23,19 @@
     return [...out.values()];
   };
 
+  // 쉼표로 구분된 항목이 2개 이상이고 각각 '/N개' 수량이 붙어 있으면 세트 상품
+  const isMulti = t => { const p = String(t).split(/,\s*/).filter(Boolean); return p.length > 1 && p.filter(x => /\/\s*\d+\s*개\s*$/.test(x.trim())).length >= 2; };
+
   PLUGINS.push({
     id: "emp-ecount",
     name: "EMP → 이카운트 매출",
     input: "EMP 정산 파일 (.xls / .xlsx)",
     outputName: d => `${d}_이카운트정산.xlsx`,
-    // 매칭 실패 품목 옆에 표시할 등록 버튼. 이름에 '+'·'세트'가 있으면 특별매칭 버튼이 진하게(권장) 표시됨
+    // 매칭 실패 품목 옆의 등록 버튼 (변환 화면 안에서 바로 등록). when=권장 버튼, solo=해당될 때 이 버튼만 표시
+    // 서로 다른 상품이 '이름/1개, 이름/2개'처럼 쉼표로 이어진 주문선택사항은 세트 상품 → 특별매칭만 표시
     errorLinks: [
-      { label: "품목매칭등록", ns: "products" },
-      { label: "특별매칭등록", ns: "sets", when: /[+＋]|세트|set\b|\bset/i },
+      { label: "품목매칭등록", ns: "products", inline: { kind: "pick", master: { ns: "master" } } },
+      { label: "특별매칭등록", ns: "sets", inline: { kind: "set", items: "products" }, when: /[+＋]|세트|set\b|\bset/i, solo: isMulti },
     ],
     dashboard: true,   // 왼쪽 메뉴에 별도 [대시보드] 메뉴 표시 (정산 파일 없이도 열람)
     weekStartDay: 5,   // 주간 매출 기준: 금요일(5) ~ 목요일
