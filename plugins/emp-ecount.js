@@ -43,7 +43,7 @@
     runLabel: "정산파일 업로드",
     dbLabel: "DB관리",
     tables: [
-      { ns: "master", title: "[DB]품목코드", readonly: true,   // 이카운트 품목등록 엑셀을 통째로 올려 동기화
+      { ns: "master", title: "[DB]품목코드", readonly: true, main: true, mainNote: "이카운트 품목(기초자료) · 전체 공통",   // 이카운트 품목등록 엑셀을 통째로 올려 동기화
         fields: [{ l: "품목코드" }, { l: "품목명" }, { l: "입고단가" }, { l: "검색창내용" }, { l: "사용구분" }, { l: "품목그룹1명" }],
         import: { label: "이카운트 품목등록 엑셀 (.xlsx)", parse: parseMaster } },
       { ns: "customers",  title: "[DB]거래처",
