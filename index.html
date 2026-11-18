@@ -5,7 +5,7 @@
 :root{--bg:#f5f6f8;--card:#fff;--tx:#16181d;--mut:#6b7280;--line:#e5e7eb;--pri:#4f46e5;--pri2:#eef0ff;--err:#dc2626;--ok:#16a34a}
 @media(prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--tx:#eceef2;--mut:#9aa1ad;--line:#2a2f38;--pri:#818cf8;--pri2:#23264a;--err:#f87171;--ok:#4ade80}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14.5px/1.55 -apple-system,"Pretendard","Malgun Gothic",system-ui,sans-serif}
-.layout{display:grid;grid-template-columns:230px 1fr;min-height:100vh}aside{background:#14172b;color:#cfd3ea;padding:16px 12px 56px;position:sticky;top:0;height:100vh;overflow:auto}
+.layout{display:grid;grid-template-columns:230px 1fr;min-height:100vh}aside{background:#14172b;color:#cfd3ea;padding:16px 12px 0;position:sticky;top:0;height:100vh;overflow:auto;display:flex;flex-direction:column}aside>*{flex:none}
 .plist{max-height:min(26rem,55vh);overflow-y:auto;margin-top:6px;border-radius:8px}.plist:not(:empty){border:1px solid var(--line)}
 button.sm,.btn.sm{padding:5px 11px;font-size:13px}.btn.ghost{background:none;color:var(--pri);border:1px solid var(--pri)}
 .pick{font-size:14.5px;color:var(--tx);padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer}.pick:hover{background:var(--pri2)}
@@ -37,7 +37,7 @@ aside details.on>summary{background:rgba(255,255,255,.12);color:#fff}
 aside .sm{padding:2px 0 6px 26px}aside .sm a,aside .sm summary{padding:6px 10px;border-radius:8px;font-size:12.5px;font-weight:500;color:#a9afcf;display:flex;align-items:center;gap:8px}
 aside .sm a:before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.35;flex:none}aside .sm a:hover,aside .sm summary:hover{background:rgba(255,255,255,.07);color:#fff}
 aside .sm a.on{background:#fff;color:#14172b;font-weight:700}aside .sm details .sm{padding:0 0 2px 10px}aside .sm summary{font-size:12.5px;color:#a9afcf}aside .sm details.on>summary{background:none;color:#fff}
-aside .me{position:absolute;bottom:14px;left:14px;right:12px;font-size:12px;color:#8f95b8}aside .me a{display:inline;padding:0;color:#cfd3ea;text-decoration:underline}
+aside .me{position:sticky;bottom:0;margin:auto -12px 0;padding:12px 18px 14px;background:#14172b;border-top:1px solid rgba(255,255,255,.08);font-size:12px;color:#8f95b8}aside .me a{display:inline;padding:0;color:#cfd3ea;text-decoration:underline}
 @media(max-width:760px){.layout{grid-template-columns:1fr}aside{position:static;height:auto;padding-bottom:16px}aside .me{position:static;margin-top:10px}}
 </style></head><body><div id="app"></div>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
