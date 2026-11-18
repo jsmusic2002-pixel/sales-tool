@@ -35,9 +35,11 @@ function loginView(msg = "") {
 
 // ---------- 레이아웃 ----------
 function shell(active, body) {
-  const nav = PLUGINS.map(p => `<div class="grp">${esc(p.name)}</div><a href="#/${p.id}/run" class="${active === p.id + "/run" ? "on" : ""}">${esc(p.runLabel || "변환")}</a>${p.dashboard ? `<a href="#/${p.id}/dash" class="${active === p.id + "/dash" ? "on" : ""}">${esc(p.dashLabel || "대시보드")}</a>` : ""}
-    <details ${active.startsWith(p.id + "/t/") ? "open" : ""}><summary>${esc(p.dbLabel || "DB관리")}</summary>` +
-    p.tables.map(t => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}">${esc(t.title)}</a>`).join("") + `</details>`).join("");
+  const mainT = PLUGINS.flatMap(p => p.tables.filter(t => t.main).map(t => ({ p, t })));   // 모든 프로그램이 같이 쓰는 표 → 맨 위 '메인DB' 메뉴
+  const mainNav = mainT.length ? `<div class="maindb"><div class="mt">★ 메인DB</div>` + mainT.map(({ p, t }) => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}"><span>${esc(t.title)}</span><small>${esc(t.mainNote || "")}</small></a>`).join("") + `</div>` : "";
+  const nav = mainNav + PLUGINS.map(p => `<div class="grp">${esc(p.name)}</div><a href="#/${p.id}/run" class="${active === p.id + "/run" ? "on" : ""}">${esc(p.runLabel || "변환")}</a>${p.dashboard ? `<a href="#/${p.id}/dash" class="${active === p.id + "/dash" ? "on" : ""}">${esc(p.dashLabel || "대시보드")}</a>` : ""}
+    <details ${active.startsWith(p.id + "/t/") && !p.tables.some(t => t.main && active === p.id + "/t/" + t.ns) ? "open" : ""}><summary>${esc(p.dbLabel || "DB관리")}</summary>` +
+    p.tables.filter(t => !t.main).map(t => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}">${esc(t.title)}</a>`).join("") + `</details>`).join("");
   app.innerHTML = `<div class="layout"><aside><h1>매출 입력 변환</h1>${nav}
     <div class="me">${esc(user.email.split("@")[0])} · <a href="#" id="out" style="display:inline;padding:0">로그아웃</a></div></aside><main><div id="toast"></div>${body}</main></div>`;
   $("#out").onclick = e => { e.preventDefault(); sb.auth.signOut(); };
@@ -145,7 +147,7 @@ function runView(p) {
   const today = new Date().toISOString().slice(0, 10);
   const prev = last && last.pid === p.id ? last : null;
   shell(p.id + "/run", `<h2>${esc(p.name)}</h2><div class="card"><div class="row">
-    ${(p.inputs || [{ id: "file", label: p.input }]).map(i => `<label style="flex:1 1 100%">${esc(i.label)}<input type="file" id="in_${i.id}" accept=".xls,.xlsx" ${i.multiple ? "multiple" : ""}></label>`).join("")}
+    ${(p.inputs || [{ id: "file", label: p.input }]).map(i => `<label style="flex:1 1 100%">${esc(i.label)}<input type="file" id="in_${i.id}" accept=".xls,.xlsx,.csv" ${i.multiple ? "multiple" : ""}></label>`).join("")}
     <label>정산 날짜<input type="date" id="date" value="${today}"></label><button id="go">변환하기</button></div>
     <p class="mut" style="margin:12px 0 0">파일은 이 컴퓨터의 브라우저에서만 처리되며 서버로 전송되지 않습니다.</p></div><div id="res">${prev ? prev.html : ""}</div>${p.dashboard ? "" : `<div id="dash"></div>`}`);
   if (prev) { bindDownload(prev); renderErrs(p); if (prev.dashDate) showDash(p, prev.dashDate); }
@@ -154,7 +156,13 @@ function runView(p) {
     if (!date || specs.some(i => i.required && !$("#in_" + i.id).files.length)) return toast("필수 파일과 날짜를 선택하세요.", true);
     $("#go").disabled = true; toast("변환 중...");
     try {
-      const readFile = async f => ({ name: f.name, rows: XLSX.utils.sheet_to_json((wb => wb.Sheets[wb.SheetNames[0]])(XLSX.read(await f.arrayBuffer(), { type: "array" })), { defval: null }) });
+      const readBook = async f => {   // CSV 는 글자 깨짐 방지를 위해 직접 해석(UTF-8 → 안 되면 EUC-KR)
+        const buf = await f.arrayBuffer();
+        if (!/\.csv$/i.test(f.name)) return XLSX.read(buf, { type: "array" });
+        let txt; try { txt = new TextDecoder("utf-8", { fatal: true }).decode(buf); } catch (e) { txt = new TextDecoder("euc-kr").decode(buf); }
+        return XLSX.read(txt.replace(/^\uFEFF/, ""), { type: "string" });
+      };
+      const readFile = async f => ({ name: f.name, rows: XLSX.utils.sheet_to_json((wb => wb.Sheets[wb.SheetNames[0]])(await readBook(f)), { defval: null }) });
       const inputs = {};
       for (const i of specs) inputs[i.id] = await Promise.all([...$("#in_" + i.id).files].map(readFile));
       const rows = p.inputs ? null : inputs.file[0].rows;
@@ -242,7 +250,7 @@ async function tableView(p, t, q) {
     });
   };
   const importCard = t.import ? `<div class="card"><div class="mut" style="margin-bottom:8px">${esc(t.import.label)} — 전체 목록을 올리면 기존 데이터와 비교해 신규·변경·삭제를 반영합니다</div>
-    <div class="row"><input type="file" id="imp" accept=".xlsx,.xls"><button id="impgo">비교하기</button></div><div id="impres" style="margin-top:12px"></div></div>` : "";
+    <div class="row"><input type="file" id="imp" accept=".xlsx,.xls,.xlsm"><button id="impgo">비교하기</button></div><div id="impres" style="margin-top:12px"></div></div>` : "";
   const picks = t.pick ? (t.picks || [{ fill: t.pick.fill }]) : [];
   const pickCard = picks.length ? `<div class="card"><div class="mut" style="margin-bottom:8px">${master.length ? "이카운트 품목(기초자료)에서 찾기 — 품목명이나 코드를 입력하면 일치하는 품목이 나타나고, 선택하면 " + (picks.some(x => x.save) ? "바로 저장됩니다" : "아래 입력칸이 자동으로 채워집니다") : `기초자료가 비어 있습니다. 먼저 <a href="#/${t.pick.plugin || p.id}/t/${t.pick.ns}">[DB]품목코드</a>에서 이카운트 품목 엑셀을 올려주세요.`}</div>
     ${picks.map((x, n) => `<div style="margin-bottom:${n < picks.length - 1 ? 10 : 0}px">${x.label ? `<div style="font-weight:600;margin-bottom:4px">${esc(x.label)}</div>` : ""}<input class="pq" data-n="${n}" placeholder="품목명 또는 코드 (여러 단어는 공백으로)" style="width:100%"><div class="plist pr" data-n="${n}"></div></div>`).join("")}</div>` : "";
