@@ -74,7 +74,7 @@ async function renderErrs(p) {
     ${all ? `<p><button id="rerun">다시 변환하기</button> <span class="mut">같은 파일로 바로 다시 변환합니다</span></p>` : `<p class="mut" style="margin-top:0">버튼을 누르면 이 자리에서 바로 등록할 수 있습니다. 모두 등록한 뒤 '다시 변환하기'를 누르세요.</p>`}
     <table>` + E.map((e, i) => {
       if (last.onlyOpen && done[e]) return "";
-      const solo = links.find(l => lkTest(l.solo, e)), show = solo ? [solo] : links, pri = solo || links.find(l => lkTest(l.when, e)) || links[0];
+      const avail = links.filter(l => (!l.only || l.only(e)) && !(l.skip && l.skip(e))), solo = avail.find(l => lkTest(l.solo, e)), show = solo ? [solo] : avail, pri = solo || avail.find(l => lkTest(l.when, e)) || avail[0];
       return `<tr style="${done[e] ? "background:var(--pri2)" : ""}"><td style="white-space:normal;word-break:break-all">${done[e] ? `<span class="ok" style="font-weight:700">✓ 처리 완료</span> ` : ""}${esc(e)}${done[e] ? `<div class="mut" style="margin-top:2px">→ ${esc(done[e].label)}</div>` : ""}</td>
         <td style="white-space:nowrap;width:1%">${done[e] ? `<button class="btn sm ghost" data-undo="${i}">되돌리기</button>` : show.map(l => `<button class="btn sm ${l === pri ? "" : "ghost"}" data-reg="${i}" data-l="${links.indexOf(l)}">${esc(l.label)}</button>`).join(" ")}</td></tr>
         <tr id="ep${i}" hidden><td colspan="2" style="white-space:normal"></td></tr>`;
@@ -83,7 +83,7 @@ async function renderErrs(p) {
   if ($("#rerun")) $("#rerun").onclick = () => $("#go").click();
   box.querySelectorAll("[data-undo]").forEach(b => b.onclick = async () => {
     const e = E[+b.dataset.undo], d = done[e]; if (!d) return;
-    const { error } = await sb.from("lookup").delete().eq("ns", d.ns).eq("k", e); if (error) return toast(error.message, true);
+    const { error } = await sb.from("lookup").delete().eq("ns", d.ns).eq("k", d.k || e); if (error) return toast(error.message, true);
     delete nsCache[d.ns]; delete done[e]; toast("등록을 되돌렸습니다."); renderErrs(p);
   });
   box.querySelectorAll("[data-reg]").forEach(b => b.onclick = async () => {
@@ -91,10 +91,11 @@ async function renderErrs(p) {
     if (!row.hidden && row.dataset.l === b.dataset.l) { row.hidden = true; return; }
     row.hidden = false; row.dataset.l = b.dataset.l; cell.innerHTML = `<span class="mut">불러오는 중...</span>`;
     const e = E[i], full = `${p.id}/${l.ns}`;
-    const finish = async (v, label) => {
-      const { error } = await sb.from("lookup").upsert({ ns: full, k: e, v }); if (error) return toast(error.message, true);
-      delete nsCache[full]; done[e] = { ns: full, label }; toast("등록했습니다."); renderErrs(p);
+    const finishAs = async (k, v, label) => {
+      const { error } = await sb.from("lookup").upsert({ ns: full, k, v }); if (error) return toast(error.message, true);
+      delete nsCache[full]; done[e] = { ns: full, k, label }; toast("등록했습니다."); renderErrs(p);
     };
+    const finish = (v, label) => finishAs(e, v, label);
     const open = `<a class="btn sm ghost" href="#/${p.id}/t/${l.ns}?new=${encodeURIComponent(p.errorKey ? p.errorKey(e) : e)}">DB 표에서 직접 열기 →</a>`;
     try {
       if (l.inline && l.inline.kind === "pick") {
@@ -108,6 +109,13 @@ async function renderErrs(p) {
           lst.querySelectorAll(".pick").forEach(el => el.onclick = () => { const r = hit[+el.dataset.j].it; finish([r.k, r.v[0]], `${r.v[0]} (${r.k})`); });
         };
         inp.oninput = draw; draw();
+      } else if (l.inline && l.inline.kind === "price") {
+        const pr = l.inline.parse(e);
+        cell.innerHTML = `<div class="mut" style="margin-bottom:6px">판매가(부가세 포함 단가)가 없는 품목입니다 — <b>${esc(pr.name || pr.k)}</b> <span class="mut">${esc(pr.k)}</span></div>
+          <div class="row" style="align-items:end"><label style="flex:0 0 200px">판매가 (원)<input type="number" min="0" class="pp" style="width:100%"></label><button type="button" class="pps">저장</button></div><div style="margin-top:8px">${open}</div>`;
+        const go = () => { const v = +cell.querySelector(".pp").value; if (!(v > 0)) return toast("판매가를 입력하세요.", true); finishAs(pr.k, [pr.name, v], `${v.toLocaleString()}원`); };
+        cell.querySelector(".pps").onclick = go; cell.querySelector(".pp").onkeydown = ev => { if (ev.key === "Enter") go(); };
+        cell.querySelector(".pp").focus();
       } else if (l.inline && l.inline.kind === "set") {
         const names = (await getNs(`${p.id}/${l.inline.items}`)).map(r => r.k), segs = parseSegs(e); let split = 0, splitTouched = false;
         cell.innerHTML = `<div class="mut" style="margin-bottom:6px">세트 상품입니다 — 구성 품목을 하나씩 골라 주세요. 수량만큼 같은 품목이 반복됩니다.</div><div class="sg"></div>
@@ -162,7 +170,14 @@ function runView(p) {
         let txt; try { txt = new TextDecoder("utf-8", { fatal: true }).decode(buf); } catch (e) { txt = new TextDecoder("euc-kr").decode(buf); }
         return XLSX.read(txt.replace(/^\uFEFF/, ""), { type: "string" });
       };
-      const readFile = async f => ({ name: f.name, rows: XLSX.utils.sheet_to_json((wb => wb.Sheets[wb.SheetNames[0]])(await readBook(f)), { defval: null }) });
+      const sheetRows = ws => {   // 첫 줄이 안내문(셀 1~2개)이고 바로 아래에 진짜 머리글이 있으면 그 줄을 머리글로 사용
+        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }), cnt = r => (r || []).filter(x => x != null && String(x).trim() !== "").length;
+        const hi = cnt(aoa[0]) < 3 ? aoa.slice(0, 6).findIndex(r => cnt(r) >= 3) : 0;
+        if (hi <= 0) return XLSX.utils.sheet_to_json(ws, { defval: null });
+        const seen = {}, keys = aoa[hi].map((h, i) => { let k = h == null || String(h).trim() === "" ? `__EMPTY_${i}` : String(h).trim(); const n = seen[k] = (seen[k] ?? -1) + 1; return n ? `${k}_${n}` : k; });
+        return aoa.slice(hi + 1).filter(r => cnt(r)).map(r => Object.fromEntries(keys.map((k, i) => [k, r[i] ?? null])));
+      };
+      const readFile = async f => ({ name: f.name, rows: sheetRows((wb => wb.Sheets[wb.SheetNames[0]])(await readBook(f))) });
       const inputs = {};
       for (const i of specs) inputs[i.id] = await Promise.all([...$("#in_" + i.id).files].map(readFile));
       const rows = p.inputs ? null : inputs.file[0].rows;
@@ -215,7 +230,7 @@ async function tableView(p, t, q) {
   const ns = `${p.id}/${t.ns}`, ro = !!t.readonly;
   let rows, master = [], names = []; const refs = {};
   try { rows = await fetchNs(ns);
-    if (t.seed) {   // 설정 기본값이 없으면 처음 열 때 자동 입력
+    if (t.seed && (!t.seedIfEmpty || !rows.length)) {   // 설정 기본값이 없으면 처음 열 때 자동 입력 (seedIfEmpty: 표가 비어 있을 때만)
       const add = t.seed.filter(([k]) => !rows.some(r => r.k === k)).map(([k, ...v]) => ({ ns, k, v }));
       if (add.length) { const { error } = await sb.from("lookup").upsert(add); if (error) throw error; rows = [...rows, ...add.map(({ k, v }) => ({ k, v }))].sort((a, b) => (a.k < b.k ? -1 : 1)); }
     }
