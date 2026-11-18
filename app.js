@@ -36,12 +36,28 @@ function loginView(msg = "") {
 // ---------- 레이아웃 ----------
 function shell(active, body) {
   const mainT = PLUGINS.flatMap(p => p.tables.filter(t => t.main).map(t => ({ p, t })));   // 모든 프로그램이 같이 쓰는 표 → 맨 위 '메인DB' 메뉴
-  const mainNav = mainT.length ? `<div class="maindb"><div class="mt">★ 메인DB</div>` + mainT.map(({ p, t }) => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}"><span>${esc(t.title)}</span><small>${esc(t.mainNote || "")}</small></a>`).join("") + `</div>` : "";
-  const nav = mainNav + PLUGINS.map(p => `<div class="grp">${esc(p.name)}</div><a href="#/${p.id}/run" class="${active === p.id + "/run" ? "on" : ""}">${esc(p.runLabel || "변환")}</a>${p.dashboard ? `<a href="#/${p.id}/dash" class="${active === p.id + "/dash" ? "on" : ""}">${esc(p.dashLabel || "대시보드")}</a>` : ""}
-    <details ${active.startsWith(p.id + "/t/") && !p.tables.some(t => t.main && active === p.id + "/t/" + t.ns) ? "open" : ""}><summary>${esc(p.dbLabel || "DB관리")}</summary>` +
-    p.tables.filter(t => !t.main).map(t => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}">${esc(t.title)}</a>`).join("") + `</details>`).join("");
-  app.innerHTML = `<div class="layout"><aside><h1>매출 입력 변환</h1>${nav}
-    <div class="me">${esc(user.email.split("@")[0])} · <a href="#" id="out" style="display:inline;padding:0">로그아웃</a></div></aside><main><div id="toast"></div>${body}</main></div>`;
+  const mainNav = mainT.length ? `<div class="maindb"><div class="mt">★ 메인DB <i>공통</i></div>` + mainT.map(({ p, t }) => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}"><span>${esc(t.title)}</span><small>${esc(t.mainNote || "")}</small></a>`).join("") + `</div>` : "";
+  // 담당자별 섹션 (새 프로그램을 추가하면 아래 ids 에 플러그인 id 와 메뉴 이름만 넣으면 됩니다)
+  const SECTIONS = [
+    { title: "이준의 Section", icon: "준", items: [["emp-ecount", "플레이오토 (EMP)"], ["coupang-ecount", "쿠팡 (로켓그로스)"]] },
+    { title: "오상일 Section", icon: "531", items: [["naver-ecount", "네이버 (N배송)"], ["temu-ecount", "테무"], ["appstory-ecount", "앱스토리몰"]] },
+  ];
+  const listed = new Set(SECTIONS.flatMap(x => x.items.map(i => i[0])));
+  const extra = PLUGINS.filter(p => !listed.has(p.id));
+  const secs = extra.length ? [...SECTIONS, { title: "기타", icon: "…", items: extra.map(p => [p.id, p.name]) }] : SECTIONS;
+  const progNav = (p, label) => {
+    const mine = active.startsWith(p.id + "/"), tbls = p.tables.filter(t => !t.main), dbOn = active.startsWith(p.id + "/t/") && !p.tables.some(t => t.main && active === p.id + "/t/" + t.ns);
+    return `<details class="${mine && !dbOn ? "on" : dbOn ? "on" : ""}" ${mine ? "open" : ""}><summary><span class="d"></span>${esc(label)}</summary><div class="sm">
+      <a href="#/${p.id}/run" class="${active === p.id + "/run" ? "on" : ""}">파일 업로드</a>
+      ${p.dashboard ? `<a href="#/${p.id}/dash" class="${active === p.id + "/dash" ? "on" : ""}">${esc(p.dashLabel || "대시보드")}</a>` : ""}
+      <details ${dbOn ? "open" : ""}><summary>${esc(p.dbLabel || "DB관리")}</summary><div class="sm">${tbls.map(t => `<a href="#/${p.id}/t/${t.ns}" class="${active === p.id + "/t/" + t.ns ? "on" : ""}">${esc(t.title)}</a>`).join("")}</div></details></div></details>`;
+  };
+  const nav = mainNav + `<div class="hd">이카운트 매출 변환</div>` + secs.map((sec, n) => {
+    const items = sec.items.map(([id, label]) => [PLUGINS.find(p => p.id === id), label]).filter(([p]) => p);
+    return `<div class="sec c${n % 4}"><div class="sh"><div class="av ${sec.icon.length > 2 ? "n" : ""}">${esc(sec.icon)}</div><b>${esc(sec.title)}</b><small>${items.length}</small></div>${items.map(([p, l]) => progNav(p, l)).join("")}</div>`;
+  }).join("");
+  app.innerHTML = `<div class="layout"><aside><div class="brand"><div class="logo">₩</div>매출 입력 변환</div>${nav}
+    <div class="me">${esc(user.email.split("@")[0])} · <a href="#" id="out">로그아웃</a></div></aside><main><div id="toast"></div>${body}</main></div>`;
   $("#out").onclick = e => { e.preventDefault(); sb.auth.signOut(); };
 }
 
