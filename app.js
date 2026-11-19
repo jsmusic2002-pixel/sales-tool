@@ -40,7 +40,7 @@ function shell(active, body) {
   // 담당자별 섹션 (새 프로그램을 추가하면 아래 ids 에 플러그인 id 와 메뉴 이름만 넣으면 됩니다)
   const SECTIONS = [
     { title: "이준의 Section", icon: "준", items: [["emp-ecount", "플레이오토 (EMP)"], ["coupang-ecount", "쿠팡 (로켓그로스)"]] },
-    { title: "오상일 Section", icon: "531", items: [["naver-ecount", "네이버 (N배송)"], ["temu-ecount", "테무"], ["appstory-ecount", "앱스토리몰"]] },
+    { title: "오상일 Section", icon: "531", items: [["naver-ecount", "네이버 (N배송)"], ["temu-ecount", "테무"], ["appstory-ecount", "앱스토리몰"], ["marketfriends-ecount", "마켓프렌즈"]] },
   ];
   const listed = new Set(SECTIONS.flatMap(x => x.items.map(i => i[0])));
   const extra = PLUGINS.filter(p => !listed.has(p.id));
@@ -188,7 +188,7 @@ function runView(p) {
       };
       const sheetRows = ws => {   // 첫 줄이 안내문(셀 1~2개)이고 바로 아래에 진짜 머리글이 있으면 그 줄을 머리글로 사용
         const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }), cnt = r => (r || []).filter(x => x != null && String(x).trim() !== "").length;
-        const hi = cnt(aoa[0]) < 3 ? aoa.slice(0, 6).findIndex(r => cnt(r) >= 3) : 0;
+        const mx = Math.max(...aoa.slice(0, 12).map(cnt)), hi = cnt(aoa[0]) < 3 ? aoa.slice(0, 12).findIndex(r => cnt(r) >= Math.max(3, mx * 0.8)) : 0;
         if (hi <= 0) return XLSX.utils.sheet_to_json(ws, { defval: null });
         const seen = {}, keys = aoa[hi].map((h, i) => { let k = h == null || String(h).trim() === "" ? `__EMPTY_${i}` : String(h).trim(); const n = seen[k] = (seen[k] ?? -1) + 1; return n ? `${k}_${n}` : k; });
         return aoa.slice(hi + 1).filter(r => cnt(r)).map(r => Object.fromEntries(keys.map((k, i) => [k, r[i] ?? null])));
